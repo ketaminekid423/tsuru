@@ -5,6 +5,8 @@
 package provision_test
 
 import (
+	"context"
+
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/provision"
 	"github.com/tsuru/tsuru/provision/provisiontest"
@@ -47,26 +49,34 @@ func (s *S) TestProcessLabels(c *check.C) {
 	config.Set("routers:fake:type", "fake")
 	defer config.Unset("routers")
 	a := provisiontest.NewFakeApp("myapp", "cobol", 0)
+	a.Tags = []string{
+		"tag1=1",
+		"tag2",
+		"space tag",
+		"weird %$! tag",
+		"tag3=a=b=c obla di obla da",
+	}
 	opts := provision.ProcessLabelsOpts{
 		App:         a,
 		Process:     "p1",
 		Provisioner: "kubernetes",
 	}
-	ls, err := provision.ProcessLabels(opts)
+	ls, err := provision.ProcessLabels(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	c.Assert(ls, check.DeepEquals, &provision.LabelSet{
 		Labels: map[string]string{
-			"is-tsuru":     "true",
-			"is-stopped":   "false",
-			"is-deploy":    "false",
-			"app-name":     "myapp",
-			"app-process":  "p1",
-			"app-platform": "cobol",
-			"app-pool":     "test-default",
-			"router-name":  "fake",
-			"router-type":  "fake",
-			"provisioner":  "kubernetes",
-			"builder":      "",
+			"is-tsuru":        "true",
+			"is-stopped":      "false",
+			"is-deploy":       "false",
+			"app-name":        "myapp",
+			"app-process":     "p1",
+			"app-platform":    "cobol",
+			"app-pool":        "test-default",
+			"provisioner":     "kubernetes",
+			"builder":         "",
+			"custom-tag-tag1": "1",
+			"custom-tag-tag2": "",
+			"custom-tag-tag3": "a=b=c obla di obla da",
 		},
 	})
 }
@@ -76,10 +86,9 @@ func (s *S) TestServiceLabels(c *check.C) {
 	defer config.Unset("routers")
 	a := provisiontest.NewFakeApp("myapp", "cobol", 0)
 	opts := provision.ServiceLabelsOpts{
-		App:      a,
-		Replicas: 3,
-		Process:  "p1",
-		Version:  9,
+		App:     a,
+		Process: "p1",
+		Version: 9,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			BuildImage:  "myimg",
 			IsBuild:     true,
@@ -87,30 +96,27 @@ func (s *S) TestServiceLabels(c *check.C) {
 			Builder:     "docker",
 		},
 	}
-	ls, err := provision.ServiceLabels(opts)
+	ls, err := provision.ServiceLabels(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	c.Assert(ls, check.DeepEquals, &provision.LabelSet{
 		RawLabels: map[string]string{
 			"version": "v9",
 		},
 		Labels: map[string]string{
-			"is-tsuru":             "true",
-			"is-build":             "true",
-			"is-service":           "true",
-			"is-stopped":           "false",
-			"is-isolated-run":      "false",
-			"is-deploy":            "false",
-			"app-name":             "myapp",
-			"app-process":          "p1",
-			"app-process-replicas": "3",
-			"app-platform":         "cobol",
-			"app-pool":             "test-default",
-			"app-version":          "9",
-			"router-name":          "fake",
-			"router-type":          "fake",
-			"provisioner":          "kubernetes",
-			"build-image":          "myimg",
-			"builder":              "docker",
+			"is-tsuru":        "true",
+			"is-build":        "true",
+			"is-service":      "true",
+			"is-stopped":      "false",
+			"is-isolated-run": "false",
+			"is-deploy":       "false",
+			"app-name":        "myapp",
+			"app-process":     "p1",
+			"app-platform":    "cobol",
+			"app-pool":        "test-default",
+			"app-version":     "9",
+			"provisioner":     "kubernetes",
+			"build-image":     "myimg",
+			"builder":         "docker",
 		},
 	})
 }
@@ -158,23 +164,21 @@ func (s *S) TestNodeLabels(c *check.C) {
 	})
 }
 
-func (s *S) TestLabelSet_WithoutAppReplicas(c *check.C) {
-	config.Set("routers:fake:type", "fake")
-	defer config.Unset("routers")
-	a := provisiontest.NewFakeApp("myapp", "cobol", 0)
-	opts := provision.ServiceLabelsOpts{
-		App:      a,
-		Replicas: 3,
-		Process:  "p1",
-		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
-			BuildImage:  "myimg",
-			IsBuild:     true,
-			Provisioner: "kubernetes",
-			Builder:     "docker",
-		},
+func (s *S) TestLabelSet_Merge(c *check.C) {
+	src := &provision.LabelSet{
+		Labels:    map[string]string{"l0": "w0", "l1": "w1"},
+		RawLabels: map[string]string{"l2": "w2"},
+		Prefix:    "myprefix.example.com/",
 	}
-	ls, err := provision.ServiceLabels(opts)
-	c.Assert(err, check.IsNil)
-	c.Assert(ls.Labels["app-process-replicas"], check.Equals, "3")
-	c.Assert(ls.WithoutAppReplicas().Labels["app-process-replicas"], check.Equals, "")
+	override := &provision.LabelSet{
+		Labels:    map[string]string{"l1": "v1"},
+		RawLabels: map[string]string{"l2": "v2", "l3": "v3"},
+	}
+	ls := src.Merge(override)
+	expected := &provision.LabelSet{
+		Labels:    map[string]string{"l0": "w0", "l1": "v1"},
+		RawLabels: map[string]string{"l2": "v2", "l3": "v3"},
+		Prefix:    "myprefix.example.com/",
+	}
+	c.Assert(ls, check.DeepEquals, expected)
 }

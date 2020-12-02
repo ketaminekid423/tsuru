@@ -5,6 +5,7 @@
 package kubernetes
 
 import (
+	"context"
 	"math/rand"
 	"sort"
 	"time"
@@ -150,7 +151,7 @@ func (s *S) TestClusterAppNamespace(c *check.C) {
 	client, err := NewClusterClient(&c1)
 	c.Assert(err, check.IsNil)
 	a := provisiontest.NewFakeApp("myapp", "python", 0)
-	err = s.p.Provision(a)
+	err = s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	ns, err := client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -219,6 +220,68 @@ func (s *S) TestClusterOvercommitFactor(c *check.C) {
 	c.Assert(ovf, check.Equals, int64(0))
 }
 
+func (s *S) TestClusterSinglePool(c *check.C) {
+	tests := []struct {
+		customData map[string]string
+		expected   struct {
+			val bool
+			err bool
+		}
+	}{
+		{
+			customData: map[string]string{
+				"single-pool": "",
+			},
+			expected: struct {
+				val bool
+				err bool
+			}{false, false},
+		},
+		{
+			customData: map[string]string{
+				"single-pool": "true",
+			},
+			expected: struct {
+				val bool
+				err bool
+			}{true, false},
+		},
+		{
+			customData: map[string]string{
+				"single-pool": "0",
+			},
+			expected: struct {
+				val bool
+				err bool
+			}{false, false},
+		},
+		{
+			customData: map[string]string{
+				"single-pool": "a",
+			},
+			expected: struct {
+				val bool
+				err bool
+			}{false, true},
+		},
+	}
+	for _, tt := range tests {
+		c1 := provTypes.Cluster{Addresses: []string{"addr1"}, CustomData: tt.customData}
+		client, err := NewClusterClient(&c1)
+		c.Assert(err, check.IsNil)
+		ovf, err := client.SinglePool()
+		if tt.expected.err {
+			c.Assert(err, check.ErrorMatches, ".*invalid syntax.*")
+			c.Assert(ovf, check.Equals, false)
+		} else {
+			c.Assert(err, check.IsNil)
+			c.Assert(ovf, check.Equals, tt.expected.val)
+		}
+
+	}
+
+}
+
 func (s *S) TestClustersForApps(c *check.C) {
 	c1 := provTypes.Cluster{
 		Name:        "c1",
@@ -250,7 +313,7 @@ func (s *S) TestClustersForApps(c *check.C) {
 	a3.Pool = "p2"
 	a4 := provisiontest.NewFakeApp("myapp4", "python", 0)
 	a4.Pool = "abc"
-	cApps, err := clustersForApps([]provision.App{a1, a2, a3, a4})
+	cApps, err := clustersForApps(context.TODO(), []provision.App{a1, a2, a3, a4})
 	c.Assert(err, check.IsNil)
 	c.Assert(cApps, check.HasLen, 2)
 	sort.Slice(cApps, func(i, j int) bool {

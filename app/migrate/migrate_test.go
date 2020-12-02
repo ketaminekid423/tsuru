@@ -5,6 +5,7 @@
 package migrate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/tsuru/tsuru/db"
 	"github.com/tsuru/tsuru/db/dbtest"
 	"github.com/tsuru/tsuru/router"
+	servicemock "github.com/tsuru/tsuru/servicemanager/mock"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	check "gopkg.in/check.v1"
 )
@@ -33,10 +35,11 @@ func (s *S) SetUpSuite(c *check.C) {
 	var err error
 	s.conn, err = db.Conn()
 	c.Assert(err, check.IsNil)
+	servicemock.SetMockService(&servicemock.MockService{})
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }
 
@@ -62,13 +65,13 @@ func (s *S) TestMigrateAppPlanRouterToRouter(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = MigrateAppPlanRouterToRouter()
 	c.Assert(err, check.IsNil)
-	a, err = app.GetByName("with-plan-router")
+	a, err = app.GetByName(context.TODO(), "with-plan-router")
 	c.Assert(err, check.IsNil)
 	c.Assert(a.Router, check.Equals, "planb")
-	a, err = app.GetByName("without-plan-router")
+	a, err = app.GetByName(context.TODO(), "without-plan-router")
 	c.Assert(err, check.IsNil)
 	c.Assert(a.Router, check.Equals, "galeb")
-	a, err = app.GetByName("with-router")
+	a, err = app.GetByName(context.TODO(), "with-router")
 	c.Assert(err, check.IsNil)
 	c.Assert(a.Router, check.Equals, "hipache")
 }
@@ -216,7 +219,7 @@ func (s *S) TestMigrateAppTsuruServicesVarToServiceEnvs(c *check.C) {
 	var resultApps []app.App
 	var dbApp *app.App
 	for _, tt := range tests {
-		dbApp, err = app.GetByName(tt.app.Name)
+		dbApp, err = app.GetByName(context.TODO(), tt.app.Name)
 		c.Assert(err, check.IsNil)
 		resultApps = append(resultApps, *dbApp)
 		c.Assert(dbApp.ServiceEnvs, check.DeepEquals, tt.expected)
@@ -240,7 +243,7 @@ func (s *S) TestMigrateAppTsuruServicesVarToServiceEnvs(c *check.C) {
 	err = MigrateAppTsuruServicesVarToServiceEnvs()
 	c.Assert(err, check.IsNil)
 	for i, tt := range tests {
-		dbApp, err = app.GetByName(tt.app.Name)
+		dbApp, err = app.GetByName(context.TODO(), tt.app.Name)
 		c.Assert(err, check.IsNil)
 		c.Assert(dbApp, check.DeepEquals, &resultApps[i])
 	}
@@ -262,10 +265,10 @@ func (s *S) TestMigrateAppPlanIDToPlanName(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = MigrateAppPlanIDToPlanName()
 	c.Assert(err, check.IsNil)
-	a, err = app.GetByName("app-with-plan-name")
+	a, err = app.GetByName(context.TODO(), "app-with-plan-name")
 	c.Assert(err, check.IsNil)
 	c.Assert(a.Plan.Name, check.Equals, "plan-name")
-	a, err = app.GetByName("app-with-plan-id")
+	a, err = app.GetByName(context.TODO(), "app-with-plan-id")
 	c.Assert(err, check.IsNil)
 	c.Assert(a.Plan.Name, check.Equals, "plan-id")
 }

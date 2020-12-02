@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"github.com/tsuru/docker-cluster/cluster"
 	"github.com/tsuru/tsuru/api"
 	"github.com/tsuru/tsuru/app"
+	"github.com/tsuru/tsuru/app/version"
 	"github.com/tsuru/tsuru/auth"
 	"github.com/tsuru/tsuru/db"
 	"github.com/tsuru/tsuru/db/dbtest"
@@ -34,6 +36,7 @@ import (
 	"github.com/tsuru/tsuru/provision/pool"
 	"github.com/tsuru/tsuru/provision/provisiontest"
 	"github.com/tsuru/tsuru/queue"
+	"github.com/tsuru/tsuru/servicemanager"
 	authTypes "github.com/tsuru/tsuru/types/auth"
 	permTypes "github.com/tsuru/tsuru/types/permission"
 	"golang.org/x/crypto/bcrypt"
@@ -102,6 +105,10 @@ func (s *HandlersSuite) SetUpTest(c *check.C) {
 		Scheme:  permission.PermAll,
 		Context: permTypes.PermissionContext{CtxType: permTypes.CtxGlobal},
 	})
+	servicemanager.AppVersion, err = version.AppVersionService()
+	c.Assert(err, check.IsNil)
+	servicemanager.AuthGroup, err = auth.GroupService()
+	c.Assert(err, check.IsNil)
 }
 
 func (s *HandlersSuite) TearDownTest(c *check.C) {
@@ -113,9 +120,9 @@ func (s *HandlersSuite) TearDownSuite(c *check.C) {
 	defer s.conn.Close()
 	coll := mainDockerProvisioner.Collection()
 	defer coll.Close()
-	coll.Database.DropDatabase()
+	dbtest.ClearAllCollections(coll.Database)
 	databaseName, _ := config.GetString("docker:cluster:mongo-database")
-	s.clusterSess.DB(databaseName).DropDatabase()
+	dbtest.ClearAllCollections(s.clusterSess.DB(databaseName))
 }
 
 func startFakeDockerNode(c *check.C) (*testing.DockerServer, func()) {
@@ -308,7 +315,7 @@ func (s *HandlersSuite) TestDockerLogsUpdateHandlerWithRestartSomeApps(c *check.
 	defer storage.Close()
 	for _, appPool := range appPools {
 		opts := pool.AddPoolOptions{Name: appPool[1]}
-		pool.AddPool(opts)
+		pool.AddPool(context.TODO(), opts)
 		appInstance := provisiontest.NewFakeApp(appPool[0], "python", 0)
 		_, err = newSuccessfulVersionForApp(s.p, appInstance, nil)
 		c.Assert(err, check.IsNil)
@@ -321,7 +328,7 @@ func (s *HandlersSuite) TestDockerLogsUpdateHandlerWithRestartSomeApps(c *check.
 
 		err = storage.Apps().Insert(appStruct)
 		c.Assert(err, check.IsNil)
-		err = s.p.Provision(appStruct)
+		err = s.p.Provision(context.TODO(), appStruct)
 		c.Assert(err, check.IsNil)
 	}
 	values := url.Values{

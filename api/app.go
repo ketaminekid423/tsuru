@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/globalsign/mgo/bson"
 	pkgErrors "github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tsuru/tsuru/api/context"
@@ -28,6 +27,7 @@ import (
 	"github.com/tsuru/tsuru/event"
 	tsuruIo "github.com/tsuru/tsuru/io"
 	"github.com/tsuru/tsuru/log"
+	tsuruNet "github.com/tsuru/tsuru/net"
 	"github.com/tsuru/tsuru/permission"
 	"github.com/tsuru/tsuru/provision"
 	"github.com/tsuru/tsuru/provision/pool"
@@ -67,7 +67,7 @@ func getAppFromContext(name string, r *http.Request) (app.App, error) {
 	var err error
 	a := context.GetApp(r)
 	if a == nil {
-		a, err = getApp(name)
+		a, err = getApp(r.Context(), name)
 		if err != nil {
 			return app.App{}, err
 		}
@@ -76,8 +76,8 @@ func getAppFromContext(name string, r *http.Request) (app.App, error) {
 	return *a, nil
 }
 
-func getApp(name string) (*app.App, error) {
-	a, err := app.GetByName(name)
+func getApp(ctx stdContext.Context, name string) (*app.App, error) {
+	a, err := app.GetByName(ctx, name)
 	if err != nil {
 		if err == appTypes.ErrAppNotFound {
 			return nil, &errors.HTTP{Code: http.StatusNotFound, Message: fmt.Sprintf("App %s not found.", name)}
@@ -96,6 +96,7 @@ func getApp(name string) (*app.App, error) {
 //   401: Unauthorized
 //   404: Not found
 func appDelete(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	a, err := getAppFromContext(r.URL.Query().Get(":app"), r)
 	if err != nil {
 		return err
@@ -122,7 +123,7 @@ func appDelete(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
 	w.Header().Set("Content-Type", "application/x-json-stream")
-	return app.Delete(&a, evt, requestIDHeader(r))
+	return app.Delete(ctx, &a, evt, requestIDHeader(r))
 }
 
 // miniApp is a minimal representation of the app, created to make appList
@@ -197,6 +198,7 @@ contextsLoop:
 //   204: No content
 //   401: Unauthorized
 func appList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	filter := &app.Filter{}
 	if name := r.URL.Query().Get("name"); name != "" {
 		filter.NameMatches = name
@@ -228,7 +230,7 @@ func appList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		w.WriteHeader(http.StatusNoContent)
 		return nil
 	}
-	apps, err := app.List(appFilterByContext(contexts, filter))
+	apps, err := app.List(ctx, appFilterByContext(contexts, filter))
 	if err != nil {
 		return err
 	}
@@ -249,7 +251,7 @@ func appList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		}
 		return json.NewEncoder(w).Encode(miniApps)
 	}
-	appUnits, err := app.Units(apps)
+	appUnits, err := app.Units(ctx, apps)
 	if err != nil {
 		return err
 	}
@@ -282,7 +284,7 @@ func appInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		return permission.ErrUnauthorized
 	}
 
-	err = a.FillInternalAddresses(r.Context())
+	err = a.FillInternalAddresses()
 	if err != nil {
 		return err
 	}
@@ -292,18 +294,19 @@ func appInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 }
 
 type inputApp struct {
-	TeamOwner   string
-	Platform    string
-	Plan        string
-	Name        string
-	Description string
-	Pool        string
-	Router      string
-	RouterOpts  map[string]string
-	Tags        []string
+	TeamOwner    string
+	Platform     string
+	Plan         string
+	Name         string
+	Description  string
+	Pool         string
+	Router       string
+	RouterOpts   map[string]string
+	Tags         []string
+	PlanOverride appTypes.PlanOverride
 }
 
-func autoTeamOwner(t auth.Token, perm *permission.PermissionScheme) (string, error) {
+func autoTeamOwner(ctx stdContext.Context, t auth.Token, perm *permission.PermissionScheme) (string, error) {
 	team, err := permission.TeamForPermission(t, perm)
 	if err == nil {
 		return team, nil
@@ -311,7 +314,7 @@ func autoTeamOwner(t auth.Token, perm *permission.PermissionScheme) (string, err
 	if err != permission.ErrTooManyTeams {
 		return "", err
 	}
-	teams, listErr := servicemanager.Team.List()
+	teams, listErr := servicemanager.Team.List(ctx)
 	if listErr != nil {
 		return "", listErr
 	}
@@ -333,6 +336,7 @@ func autoTeamOwner(t auth.Token, perm *permission.PermissionScheme) (string, err
 //   403: Quota exceeded
 //   409: App already exists
 func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	var ia inputApp
 	err = ParseInput(r, &ia)
 	if err != nil {
@@ -353,7 +357,7 @@ func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	tags, _ := InputValues(r, "tag")
 	a.Tags = append(a.Tags, tags...) // for compatibility
 	if a.TeamOwner == "" {
-		a.TeamOwner, err = autoTeamOwner(t, permission.PermAppCreate)
+		a.TeamOwner, err = autoTeamOwner(ctx, t, permission.PermAppCreate)
 		if err != nil {
 			return err
 		}
@@ -370,7 +374,7 @@ func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	}
 	if a.Platform != "" {
 		repo, _ := image.SplitImageName(a.Platform)
-		platform, errPlat := servicemanager.Platform.FindByName(repo)
+		platform, errPlat := servicemanager.Platform.FindByName(ctx, repo)
 		if errPlat != nil {
 			return errPlat
 		}
@@ -393,7 +397,7 @@ func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	err = app.CreateApp(&a, u)
+	err = app.CreateApp(ctx, &a, u)
 	if err != nil {
 		log.Errorf("Got error while creating app: %s", err)
 		if _, ok := err.(appTypes.NoTeamsError); ok {
@@ -418,7 +422,7 @@ func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 		}
 		return err
 	}
-	repo, err := repository.Manager().GetRepository(a.Name)
+	repo, err := repository.Manager().GetRepository(ctx, a.Name)
 	if err != nil {
 		return err
 	}
@@ -454,6 +458,7 @@ func createApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 //   401: Unauthorized
 //   404: Not found
 func updateApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	var ia inputApp
 	err = ParseInput(r, &ia)
 	if err != nil {
@@ -462,7 +467,7 @@ func updateApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	imageReset, _ := strconv.ParseBool(InputValue(r, "imageReset"))
 	updateData := app.App{
 		TeamOwner:      ia.TeamOwner,
-		Plan:           appTypes.Plan{Name: ia.Plan},
+		Plan:           appTypes.Plan{Name: ia.Plan, Override: ia.PlanOverride},
 		Pool:           ia.Pool,
 		Description:    ia.Description,
 		Router:         ia.Router,
@@ -492,6 +497,9 @@ func updateApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	if updateData.Plan.Name != "" {
 		wantedPerms = append(wantedPerms, permission.PermAppUpdatePlan)
 	}
+	if updateData.Plan.Override != (appTypes.PlanOverride{}) {
+		wantedPerms = append(wantedPerms, permission.PermAppUpdatePlanoverride)
+	}
 	if updateData.Pool != "" {
 		if noRestart {
 			return &errors.HTTP{Code: http.StatusBadRequest, Message: "You must restart the app when changing the pool."}
@@ -503,7 +511,7 @@ func updateApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 	}
 	if updateData.Platform != "" {
 		repo, _ := image.SplitImageName(updateData.Platform)
-		platform, errPlat := servicemanager.Platform.FindByName(repo)
+		platform, errPlat := servicemanager.Platform.FindByName(ctx, repo)
 		if errPlat != nil {
 			return errPlat
 		}
@@ -533,16 +541,21 @@ func updateApp(w http.ResponseWriter, r *http.Request, t auth.Token) (err error)
 		}
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdate,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdate,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
 	w.Header().Set("Content-Type", "application/x-json-stream")
@@ -609,16 +622,21 @@ func addUnits(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) 
 		return permission.ErrUnauthorized
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdateUnitAdd,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdateUnitAdd,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	w.Header().Set("Content-Type", "application/x-json-stream")
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
@@ -656,22 +674,27 @@ func removeUnits(w http.ResponseWriter, r *http.Request, t auth.Token) (err erro
 		return permission.ErrUnauthorized
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdateUnitRemove,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdateUnitRemove,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	w.Header().Set("Content-Type", "application/x-json-stream")
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	return a.RemoveUnits(n, processName, version, evt)
+	return a.RemoveUnits(ctx, n, processName, version, evt)
 }
 
 // title: set unit status
@@ -684,6 +707,7 @@ func removeUnits(w http.ResponseWriter, r *http.Request, t auth.Token) (err erro
 //   401: Unauthorized
 //   404: App or unit not found
 func setUnitStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	unitName := r.URL.Query().Get(":unit")
 	if unitName == "" {
 		return &errors.HTTP{
@@ -700,7 +724,7 @@ func setUnitStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		}
 	}
 	appName := r.URL.Query().Get(":app")
-	a, err := app.GetByName(appName)
+	a, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
@@ -728,6 +752,7 @@ func setUnitStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   401: Unauthorized
 //   404: App or unit not found
 func setNodeStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	if t.GetAppName() != app.InternalAppName {
 		return &errors.HTTP{Code: http.StatusForbidden, Message: "this token is not allowed to execute this action"}
 	}
@@ -736,7 +761,7 @@ func setNodeStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	if err != nil {
 		return err
 	}
-	result, err := app.UpdateNodeStatus(hostInput)
+	result, err := app.UpdateNodeStatus(ctx, hostInput)
 	if err != nil {
 		if err == provision.ErrNodeNotFound {
 			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
@@ -756,6 +781,7 @@ func setNodeStatus(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   404: App or team not found
 //   409: Grant already exists
 func grantAppAccess(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":app")
 	teamName := r.URL.Query().Get(":team")
 	a, err := getAppFromContext(appName, r)
@@ -779,7 +805,7 @@ func grantAppAccess(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	team, err := servicemanager.Team.FindByName(teamName)
+	team, err := servicemanager.Team.FindByName(ctx, teamName)
 	if err != nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: "Team not found"}
 	}
@@ -799,6 +825,7 @@ func grantAppAccess(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 //   403: Forbidden
 //   404: App or team not found
 func revokeAppAccess(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":app")
 	teamName := r.URL.Query().Get(":team")
 	a, err := getAppFromContext(appName, r)
@@ -822,7 +849,7 @@ func revokeAppAccess(w http.ResponseWriter, r *http.Request, t auth.Token) (err 
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	team, err := servicemanager.Team.FindByName(teamName)
+	team, err := servicemanager.Team.FindByName(ctx, teamName)
 	if err != nil || team == nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: "Team not found"}
 	}
@@ -1168,6 +1195,7 @@ func unsetCName(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 //   401: Unauthorized
 //   404: App not found
 func appLog(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	var err error
 	var lines int
 	if l := r.URL.Query().Get("lines"); l != "" {
@@ -1211,7 +1239,7 @@ func appLog(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		Units:        units,
 		Token:        t,
 	}
-	logs, err := a.LastLogs(logService, listArgs)
+	logs, err := a.LastLogs(ctx, logService, listArgs)
 	if err != nil {
 		return err
 	}
@@ -1223,11 +1251,11 @@ func appLog(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	if !follow {
 		return nil
 	}
-	watcher, err := logService.Watch(listArgs)
+	watcher, err := logService.Watch(ctx, listArgs)
 	if err != nil {
 		return err
 	}
-	return followLogs(r.Context(), a.Name, watcher, encoder)
+	return followLogs(tsuruNet.CancelableParentContext(r.Context()), a.Name, watcher, encoder)
 }
 
 type msgEncoder interface {
@@ -1245,7 +1273,6 @@ func followLogs(ctx stdContext.Context, appName string, watcher appTypes.LogWatc
 	tailCountMetric.Inc()
 	defer tailCountMetric.Dec()
 
-	closeChan := ctx.Done()
 	logChan := watcher.Chan()
 
 	entriesMetric := logsAppTailEntries.WithLabelValues(appName)
@@ -1253,7 +1280,7 @@ func followLogs(ctx stdContext.Context, appName string, watcher appTypes.LogWatc
 		var logMsg appTypes.Applog
 		var chOpen bool
 		select {
-		case <-closeChan:
+		case <-ctx.Done():
 			return nil
 		case logMsg, chOpen = <-logChan:
 			entriesMetric.Inc()
@@ -1268,23 +1295,28 @@ func followLogs(ctx stdContext.Context, appName string, watcher appTypes.LogWatc
 	}
 }
 
-func getServiceInstance(serviceName, instanceName, appName string) (*service.ServiceInstance, *app.App, error) {
-	var app app.App
+func getServiceInstance(ctx stdContext.Context, serviceName, instanceName, appName string) (*service.ServiceInstance, *app.App, error) {
 	conn, err := db.Conn()
 	if err != nil {
 		return nil, nil, err
 	}
 	defer conn.Close()
-	instance, err := getServiceInstanceOrError(serviceName, instanceName)
+	instance, err := getServiceInstanceOrError(ctx, serviceName, instanceName)
 	if err != nil {
 		return nil, nil, err
 	}
-	err = conn.Apps().Find(bson.M{"name": appName}).One(&app)
-	if err != nil {
+
+	app, err := app.GetByName(ctx, appName)
+
+	if err == appTypes.ErrAppNotFound {
 		err = &errors.HTTP{Code: http.StatusNotFound, Message: fmt.Sprintf("App %s not found.", appName)}
 		return nil, nil, err
 	}
-	return instance, &app, nil
+	if err != nil {
+		return nil, nil, err
+
+	}
+	return instance, app, nil
 }
 
 // title: bind service instance
@@ -1298,6 +1330,7 @@ func getServiceInstance(serviceName, instanceName, appName string) (*service.Ser
 //   401: Unauthorized
 //   404: App not found
 func bindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	instanceName := r.URL.Query().Get(":instance")
 	appName := r.URL.Query().Get(":app")
 	serviceName := r.URL.Query().Get(":service")
@@ -1309,7 +1342,7 @@ func bindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token) (
 	if err != nil {
 		return err
 	}
-	instance, a, err := getServiceInstance(serviceName, instanceName, appName)
+	instance, a, err := getServiceInstance(ctx, serviceName, instanceName, appName)
 	if err != nil {
 		return err
 	}
@@ -1336,7 +1369,10 @@ func bindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token) (
 		return err
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
+		Target: appTarget(appName),
+		ExtraTargets: []event.ExtraTarget{
+			{Target: serviceInstanceTarget(serviceName, instanceName)},
+		},
 		Kind:       permission.PermAppUpdateBind,
 		Owner:      t,
 		CustomData: event.FormToCustomData(InputFields(r)),
@@ -1381,11 +1417,12 @@ func bindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token) (
 //   401: Unauthorized
 //   404: App not found
 func unbindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	instanceName, appName, serviceName := r.URL.Query().Get(":instance"), r.URL.Query().Get(":app"),
 		r.URL.Query().Get(":service")
 	noRestart, _ := strconv.ParseBool(InputValue(r, "noRestart"))
 	force, _ := strconv.ParseBool(InputValue(r, "force"))
-	instance, a, err := getServiceInstance(serviceName, instanceName, appName)
+	instance, a, err := getServiceInstance(ctx, serviceName, instanceName, appName)
 	if err != nil {
 		return err
 	}
@@ -1405,7 +1442,7 @@ func unbindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token)
 		return permission.ErrUnauthorized
 	}
 	if force {
-		s, errGet := service.Get(instance.ServiceName)
+		s, errGet := service.Get(ctx, instance.ServiceName)
 		if errGet != nil {
 			return errGet
 		}
@@ -1417,7 +1454,10 @@ func unbindServiceInstance(w http.ResponseWriter, r *http.Request, t auth.Token)
 		}
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
+		Target: appTarget(appName),
+		ExtraTargets: []event.ExtraTarget{
+			{Target: serviceInstanceTarget(serviceName, instanceName)},
+		},
 		Kind:       permission.PermAppUpdateUnbind,
 		Owner:      t,
 		CustomData: event.FormToCustomData(InputFields(r)),
@@ -1470,22 +1510,27 @@ func restart(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 		return permission.ErrUnauthorized
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdateRestart,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdateRestart,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	w.Header().Set("Content-Type", "application/x-json-stream")
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	return a.Restart(process, version, evt)
+	return a.Restart(ctx, process, version, evt)
 }
 
 // title: app sleep
@@ -1499,6 +1544,7 @@ func restart(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 //   401: Unauthorized
 //   404: App not found
 func sleep(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	version := InputValue(r, "version")
 	process := InputValue(r, "process")
 	appName := r.URL.Query().Get(":app")
@@ -1537,7 +1583,7 @@ func sleep(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	return a.Sleep(evt, process, version, proxyURL)
+	return a.Sleep(ctx, evt, process, version, proxyURL)
 }
 
 // title: app log
@@ -1550,7 +1596,8 @@ func sleep(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 //   401: Unauthorized
 //   404: App not found
 func addLog(w http.ResponseWriter, r *http.Request, t auth.Token) error {
-	a, err := app.GetByName(r.URL.Query().Get(":app"))
+	ctx := r.Context()
+	a, err := app.GetByName(ctx, r.URL.Query().Get(":app"))
 	if err != nil {
 		return err
 	}
@@ -1589,6 +1636,7 @@ func addLog(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   409: App locked
 //   412: Number of units or platform don't match
 func swap(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	app1Name := InputValue(r, "app1")
 	app2Name := InputValue(r, "app2")
 	forceSwap := InputValue(r, "force")
@@ -1596,11 +1644,11 @@ func swap(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 	if forceSwap == "" {
 		forceSwap = "false"
 	}
-	app1, err := getApp(app1Name)
+	app1, err := getApp(ctx, app1Name)
 	if err != nil {
 		return err
 	}
-	app2, err := getApp(app2Name)
+	app2, err := getApp(ctx, app2Name)
 	if err != nil {
 		return err
 	}
@@ -1653,7 +1701,7 @@ func swap(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 			}
 		}
 	}
-	return app.Swap(app1, app2, cnameOnly)
+	return app.Swap(ctx, app1, app2, cnameOnly)
 }
 
 // title: app start
@@ -1680,22 +1728,27 @@ func start(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 		return permission.ErrUnauthorized
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdateStart,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdateStart,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	w.Header().Set("Content-Type", "application/x-json-stream")
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	return a.Start(evt, process, version)
+	return a.Start(ctx, evt, process, version)
 }
 
 // title: app stop
@@ -1722,22 +1775,27 @@ func stop(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 		return permission.ErrUnauthorized
 	}
 	evt, err := event.New(&event.Opts{
-		Target:     appTarget(appName),
-		Kind:       permission.PermAppUpdateStop,
-		Owner:      t,
-		CustomData: event.FormToCustomData(InputFields(r)),
-		Allowed:    event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		Target:        appTarget(appName),
+		Kind:          permission.PermAppUpdateStop,
+		Owner:         t,
+		CustomData:    event.FormToCustomData(InputFields(r)),
+		Allowed:       event.Allowed(permission.PermAppReadEvents, contextsForApp(&a)...),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents, contextsForApp(&a)...),
+		Cancelable:    true,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { evt.Done(err) }()
+	ctx, cancel := evt.CancelableContext(a.Context())
+	defer cancel()
+	a.ReplaceContext(ctx)
 	w.Header().Set("Content-Type", "application/x-json-stream")
 	keepAliveWriter := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	return a.Stop(evt, process, version)
+	return a.Stop(ctx, evt, process, version)
 }
 
 // title: app unlock
@@ -1766,8 +1824,9 @@ func isDeployAgentUA(r *http.Request) bool {
 //   401: Unauthorized
 //   404: App not found
 func registerUnit(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":app")
-	a, err := app.GetByName(appName)
+	a, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return err
 	}
@@ -1803,7 +1862,7 @@ func registerUnit(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 			return err
 		}
 	}
-	err = a.RegisterUnit(hostname, customData)
+	err = a.RegisterUnit(ctx, hostname, customData)
 	if err != nil {
 		if err, ok := err.(*provision.UnitNotFoundError); ok {
 			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
@@ -1857,6 +1916,7 @@ type compatRebuildRoutesResult struct {
 //   401: Unauthorized
 //   404: App not found
 func appRebuildRoutes(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	a, err := getAppFromContext(r.URL.Query().Get(":app"), r)
 	if err != nil {
 		return err
@@ -1881,7 +1941,7 @@ func appRebuildRoutes(w http.ResponseWriter, r *http.Request, t auth.Token) (err
 	result := make(map[string]rebuild.RebuildRoutesResult)
 	defer func() { evt.DoneCustomData(err, result) }()
 	w.Header().Set("Content-Type", "application/json")
-	result, err = rebuild.RebuildRoutes(&a, dry)
+	result, err = rebuild.RebuildRoutes(ctx, &a, dry)
 	if err != nil {
 		return err
 	}

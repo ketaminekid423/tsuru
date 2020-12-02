@@ -5,6 +5,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,13 +36,13 @@ func (s *S) createService(c *check.C) {
 
 func (s *S) TestGetService(c *check.C) {
 	s.createService(c)
-	anotherService, err := Get(s.service.Name)
+	anotherService, err := Get(context.TODO(), s.service.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(anotherService.Name, check.Equals, s.service.Name)
 }
 
 func (s *S) TestGetServiceReturnsErrorIfTheServiceIsDeleted(c *check.C) {
-	_, err := Get("anything")
+	_, err := Get(context.TODO(), "anything")
 	c.Assert(err, check.NotNil)
 }
 
@@ -75,7 +76,7 @@ func (s *S) TestGetServiceBrokered(c *check.C) {
 		}},
 	}
 	ClientFactory = osbfake.NewFakeClientFunc(config)
-	serv, err := Get("aws::service")
+	serv, err := Get(context.TODO(), "aws::service")
 	c.Assert(err, check.IsNil)
 	c.Assert(serv, check.DeepEquals, Service{
 		Name: "aws::service",
@@ -101,7 +102,7 @@ func (s *S) TestGetServiceBrokeredFromCache(c *check.C) {
 			},
 		}, nil
 	}
-	serv, err := Get("aws::service")
+	serv, err := Get(context.TODO(), "aws::service")
 	c.Assert(err, check.IsNil)
 	c.Assert(serv, check.DeepEquals, Service{
 		Name: "aws::service",
@@ -114,7 +115,7 @@ func (s *S) TestGetServiceBrokeredServiceBrokerNotFound(c *check.C) {
 		c.Assert(brokerName, check.Equals, "broker")
 		return serviceTypes.Broker{}, serviceTypes.ErrServiceBrokerNotFound
 	}
-	serv, err := Get("broker::service")
+	serv, err := Get(context.TODO(), "broker::service")
 	c.Assert(err, check.DeepEquals, serviceTypes.ErrServiceBrokerNotFound)
 	c.Assert(serv, check.DeepEquals, Service{})
 }
@@ -128,7 +129,7 @@ func (s *S) TestGetServiceBrokeredServiceNotFound(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = sb.Create(serviceTypes.Broker{Name: "aws"})
 	c.Assert(err, check.IsNil)
-	serv, err := Get("aws::service")
+	serv, err := Get(context.TODO(), "aws::service")
 	c.Assert(err, check.DeepEquals, ErrServiceNotFound)
 	c.Assert(serv, check.DeepEquals, Service{})
 }
@@ -146,7 +147,7 @@ func (s *S) TestCreateService(c *check.C) {
 	}
 	err := Create(*service)
 	c.Assert(err, check.IsNil)
-	se, err := Get(service.Name)
+	se, err := Get(context.TODO(), service.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(se.Name, check.Equals, service.Name)
 	c.Assert(se.Endpoint["production"], check.Equals, endpt["production"])
@@ -342,7 +343,7 @@ func (s *S) TestGetServicesNoCache(c *check.C) {
 		}},
 	}
 	ClientFactory = osbfake.NewFakeClientFunc(config)
-	services, err := GetServices()
+	services, err := GetServices(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(services, check.DeepEquals, []Service{
 		{
@@ -386,7 +387,7 @@ func (s *S) TestGetServicesFromCache(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = sb.Create(serviceTypes.Broker{Name: "aws"})
 	c.Assert(err, check.IsNil)
-	services, err := GetServices()
+	services, err := GetServices(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(services, check.DeepEquals, []Service{
 		{
@@ -433,7 +434,7 @@ func (s *S) TestGetServicesByOwnerTeamsAndServices(c *check.C) {
 	}
 	err = Create(srvc2)
 	c.Assert(err, check.IsNil)
-	services, err := GetServicesByOwnerTeamsAndServices([]string{s.team.Name}, nil)
+	services, err := GetServicesByOwnerTeamsAndServices(context.TODO(), []string{s.team.Name}, nil)
 	c.Assert(err, check.IsNil)
 	expected := []Service{srvc}
 	c.Assert(services, check.DeepEquals, expected)
@@ -458,7 +459,7 @@ func (s *S) TestGetServicesByOwnerTeamsAndServicesWithServices(c *check.C) {
 	}
 	err = Create(srvc2)
 	c.Assert(err, check.IsNil)
-	services, err := GetServicesByOwnerTeamsAndServices([]string{s.team.Name}, []string{srvc2.Name})
+	services, err := GetServicesByOwnerTeamsAndServices(context.TODO(), []string{s.team.Name}, []string{srvc2.Name})
 	c.Assert(err, check.IsNil)
 	c.Assert(services, check.HasLen, 2)
 	var names []string
@@ -489,7 +490,7 @@ func (s *S) TestGetServicesByOwnerTeamsAndServicesShouldNotReturnsDeletedService
 	c.Assert(err, check.IsNil)
 	err = Delete(deletedService)
 	c.Assert(err, check.IsNil)
-	services, err := GetServicesByOwnerTeamsAndServices([]string{s.team.Name}, nil)
+	services, err := GetServicesByOwnerTeamsAndServices(context.TODO(), []string{s.team.Name}, nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(err, check.IsNil)
 	expected := []Service{service}
@@ -569,7 +570,7 @@ func (s *S) TestProxy(c *check.C) {
 	c.Assert(err, check.IsNil)
 	recorder := httptest.NewRecorder()
 	evt := createEvt(c)
-	err = Proxy(&service, "/aaa", evt, "", recorder, request)
+	err = Proxy(context.TODO(), &service, "/aaa", evt, "", recorder, request)
 	c.Assert(err, check.IsNil)
 	c.Assert(recorder.Code, check.Equals, http.StatusNoContent)
 }
@@ -584,7 +585,7 @@ func (s *S) TestRenameServiceTeam(c *check.C) {
 		err := s.conn.Services().Insert(&si)
 		c.Assert(err, check.IsNil)
 	}
-	err := RenameServiceTeam("team2", "team9000")
+	err := RenameServiceTeam(context.TODO(), "team2", "team9000")
 	c.Assert(err, check.IsNil)
 	var dbServices []Service
 	err = s.conn.Services().Find(nil).Sort("_id").All(&dbServices)

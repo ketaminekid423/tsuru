@@ -5,6 +5,7 @@
 package kubernetes
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,26 @@ func (s *S) TestNodePool(c *check.C) {
 			},
 		},
 	}
+	node.cluster = s.clusterClient
+	c.Assert(node.Pool(), check.Equals, "p1")
+}
+
+func (s *S) TestNodePoolSinglePool(c *check.C) {
+	s.clusterClient.CustomData["single-pool"] = "true"
+	s.clusterClient.Pools = []string{"p1"}
+	node := kubernetesNodeWrapper{
+		node: &apiv1.Node{
+			Status: apiv1.NodeStatus{
+				Addresses: []apiv1.NodeAddress{
+					{
+						Type:    apiv1.NodeInternalIP,
+						Address: "192.168.99.100",
+					},
+				},
+			},
+		},
+	}
+	node.cluster = s.clusterClient
 	c.Assert(node.Pool(), check.Equals, "p1")
 }
 
@@ -173,7 +194,7 @@ func (s *S) TestNodeUnits(c *check.C) {
 	defer rollback()
 	routertest.FakeRouter.Reset()
 	a := &app.App{Name: fakeApp.GetName(), TeamOwner: s.team.Name, Platform: fakeApp.GetPlatform()}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newSuccessfulVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -181,10 +202,10 @@ func (s *S) TestNodeUnits(c *check.C) {
 			"worker": "myworker",
 		},
 	})
-	err = s.p.Start(a, "", version)
+	err = s.p.Start(context.TODO(), a, "", version)
 	c.Assert(err, check.IsNil)
 	wait()
-	node, err := s.p.GetNode("192.168.99.1")
+	node, err := s.p.GetNode(context.TODO(), "192.168.99.1")
 	c.Assert(err, check.IsNil)
 	units, err := node.Units()
 	c.Assert(err, check.IsNil)
@@ -240,15 +261,15 @@ func (s *S) TestNodeUnitsUsingPoolNamespaces(c *check.C) {
 		return p1, nil
 	})
 	defer provision.Unregister(p1.Name)
-	err := pool.AddPool(pool.AddPoolOptions{Name: "pool1", Provisioner: p1.Name})
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: "pool1", Provisioner: p1.Name})
 	c.Assert(err, check.IsNil)
-	err = pool.AddPool(pool.AddPoolOptions{Name: "pool2", Provisioner: p1.Name})
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: "pool2", Provisioner: p1.Name})
 	c.Assert(err, check.IsNil)
 	app1 := &app.App{Name: "myapp", TeamOwner: s.team.Name, Platform: "python", Pool: "pool1"}
-	err = app.CreateApp(app1, s.user)
+	err = app.CreateApp(context.TODO(), app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := &app.App{Name: "otherapp", TeamOwner: s.team.Name, Platform: "python", Pool: "pool2"}
-	err = app.CreateApp(app2, s.user)
+	err = app.CreateApp(context.TODO(), app2, s.user)
 	c.Assert(err, check.IsNil)
 	// TODO: add a second node after fixing kubernetes FakePods: https://github.com/kubernetes/kubernetes/blob/865321c2d69d249d95079b7f8e2ca99f5430d79e/staging/src/k8s.io/client-go/kubernetes/typed/core/v1/fake/fake_pod.go#L67
 	numNodes := 1
@@ -290,7 +311,7 @@ func (s *S) TestNodeUnitsUsingPoolNamespaces(c *check.C) {
 		return false, nil, nil
 	})
 
-	node, err := s.p.GetNode("192.168.99.1")
+	node, err := s.p.GetNode(context.TODO(), "192.168.99.1")
 	c.Assert(err, check.IsNil)
 	units, err := node.Units()
 	c.Assert(err, check.IsNil)
@@ -349,7 +370,7 @@ func (s *S) TestNodeUnitsOnlyFromServices(c *check.C) {
 	c.Assert(err, check.IsNil)
 	routertest.FakeRouter.Reset()
 	a := &app.App{Name: fakeApp.GetName(), TeamOwner: s.team.Name, Platform: fakeApp.GetPlatform()}
-	err = app.CreateApp(a, s.user)
+	err = app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newSuccessfulVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -357,10 +378,10 @@ func (s *S) TestNodeUnitsOnlyFromServices(c *check.C) {
 			"worker": "myworker",
 		},
 	})
-	err = s.p.Start(a, "", version)
+	err = s.p.Start(context.TODO(), a, "", version)
 	c.Assert(err, check.IsNil)
 	wait()
-	node, err := s.p.GetNode("192.168.99.1")
+	node, err := s.p.GetNode(context.TODO(), "192.168.99.1")
 	c.Assert(err, check.IsNil)
 	units, err := node.Units()
 	c.Assert(err, check.IsNil)

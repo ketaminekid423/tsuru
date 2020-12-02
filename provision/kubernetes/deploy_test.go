@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,13 +28,13 @@ import (
 	"github.com/tsuru/tsuru/provision/nodecontainer"
 	"github.com/tsuru/tsuru/provision/servicecommon"
 	"github.com/tsuru/tsuru/safe"
+	"github.com/tsuru/tsuru/servicemanager"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	provTypes "github.com/tsuru/tsuru/types/provision"
 	"github.com/tsuru/tsuru/volume"
 	check "gopkg.in/check.v1"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
-	extensions "k8s.io/api/extensions/v1beta1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,7 +61,7 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -68,7 +69,7 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 			"p2": "cmd2",
 		},
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -86,35 +87,27 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 	maxUnavailable := intstr.FromInt(0)
 	expectedUID := int64(1000)
 	depLabels := map[string]string{
-		"tsuru.io/is-tsuru":             "true",
-		"tsuru.io/is-service":           "true",
-		"tsuru.io/is-build":             "false",
-		"tsuru.io/is-stopped":           "false",
-		"tsuru.io/is-deploy":            "false",
-		"tsuru.io/is-isolated-run":      "false",
-		"tsuru.io/is-routable":          "true",
-		"tsuru.io/app-name":             "myapp",
-		"tsuru.io/app-process":          "p1",
-		"tsuru.io/app-process-replicas": "1",
-		"tsuru.io/app-platform":         "",
-		"tsuru.io/app-pool":             "test-default",
-		"tsuru.io/app-version":          "1",
-		"tsuru.io/provisioner":          "kubernetes",
-		"tsuru.io/builder":              "",
-		"app":                           "myapp-p1",
-		"version":                       "v1",
+		"tsuru.io/is-tsuru":        "true",
+		"tsuru.io/is-service":      "true",
+		"tsuru.io/is-build":        "false",
+		"tsuru.io/is-stopped":      "false",
+		"tsuru.io/is-deploy":       "false",
+		"tsuru.io/is-isolated-run": "false",
+		"tsuru.io/is-routable":     "true",
+		"tsuru.io/app-name":        "myapp",
+		"tsuru.io/app-process":     "p1",
+		"tsuru.io/app-platform":    "",
+		"tsuru.io/app-pool":        "test-default",
+		"tsuru.io/provisioner":     "kubernetes",
+		"tsuru.io/builder":         "",
+		"app":                      "myapp-p1",
 	}
 	podLabels := make(map[string]string)
 	for k, v := range depLabels {
-		if k == "tsuru.io/app-process-replicas" {
-			continue
-		}
 		podLabels[k] = v
 	}
-	annotations := map[string]string{
-		"tsuru.io/router-type": "fake",
-		"tsuru.io/router-name": "fake",
-	}
+	podLabels["tsuru.io/app-version"] = "1"
+	podLabels["version"] = "v1"
 	nsName, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
 	expected := &appsv1.Deployment{
@@ -122,7 +115,7 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 			Name:        "myapp-p1",
 			Namespace:   nsName,
 			Labels:      depLabels,
-			Annotations: annotations,
+			Annotations: map[string]string{},
 		},
 		Status: appsv1.DeploymentStatus{
 			UpdatedReplicas: 1,
@@ -148,8 +141,7 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 			},
 			Template: apiv1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      podLabels,
-					Annotations: annotations,
+					Labels: podLabels,
 				},
 				Spec: apiv1.PodSpec{
 					EnableServiceLinks: func(b bool) *bool { return &b }(false),
@@ -160,8 +152,9 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 					NodeSelector: map[string]string{
 						"tsuru.io/pool": "test-default",
 					},
-					RestartPolicy: "Always",
-					Subdomain:     "myapp-p1-units",
+					RestartPolicy:                 "Always",
+					Subdomain:                     "myapp-p1-units",
+					TerminationGracePeriodSeconds: func(v int64) *int64 { return &v }(40),
 					Containers: []apiv1.Container{
 						{
 							Name:  "myapp-p1",
@@ -181,11 +174,22 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 								{Name: "PORT_p1", Value: "8888"},
 							},
 							Resources: apiv1.ResourceRequirements{
-								Limits:   apiv1.ResourceList{},
-								Requests: apiv1.ResourceList{},
+								Limits: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
+								},
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+								},
 							},
 							Ports: []apiv1.ContainerPort{
 								{ContainerPort: 8888},
+							},
+							Lifecycle: &apiv1.Lifecycle{
+								PreStop: &apiv1.Handler{
+									Exec: &apiv1.ExecAction{
+										Command: []string{"sh", "-c", "sleep 10 || true"},
+									},
+								},
 							},
 						},
 					},
@@ -213,10 +217,6 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 				"tsuru.io/app-pool":     "test-default",
 				"tsuru.io/provisioner":  "kubernetes",
 				"tsuru.io/builder":      "",
-			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
 			},
 		},
 		Spec: apiv1.ServiceSpec{
@@ -260,10 +260,6 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 				"tsuru.io/builder":         "",
 				"version":                  "v1",
 			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
-			},
 		},
 		Spec: apiv1.ServiceSpec{
 			Selector: map[string]string{
@@ -306,10 +302,6 @@ func (s *S) TestServiceManagerDeployService(c *check.C) {
 				"tsuru.io/app-pool":            "test-default",
 				"tsuru.io/provisioner":         "kubernetes",
 				"tsuru.io/builder":             "",
-			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
 			},
 		},
 		Spec: apiv1.ServiceSpec{
@@ -365,7 +357,7 @@ func (s *S) TestServiceManagerDeployServiceWithPoolNamespaces(c *check.C) {
 		}
 		return false, nil, nil
 	})
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	processes := map[string]interface{}{
 		"p1": "cmd1",
@@ -376,7 +368,7 @@ func (s *S) TestServiceManagerDeployServiceWithPoolNamespaces(c *check.C) {
 		"processes": processes,
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -392,7 +384,7 @@ func (s *S) TestServiceManagerDeployServiceCustomPorts(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, nil)
 	err = version.AddData(appTypes.AddVersionDataArgs{
@@ -400,7 +392,7 @@ func (s *S) TestServiceManagerDeployServiceCustomPorts(c *check.C) {
 		Processes:    map[string][]string{"p1": {"cmd1"}},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -429,10 +421,6 @@ func (s *S) TestServiceManagerDeployServiceCustomPorts(c *check.C) {
 				"tsuru.io/app-pool":     "test-default",
 				"tsuru.io/provisioner":  "kubernetes",
 				"tsuru.io/builder":      "",
-			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
 			},
 		},
 		Spec: apiv1.ServiceSpec{
@@ -481,10 +469,6 @@ func (s *S) TestServiceManagerDeployServiceCustomPorts(c *check.C) {
 				"tsuru.io/provisioner":         "kubernetes",
 				"tsuru.io/builder":             "",
 			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
-			},
 		},
 		Spec: apiv1.ServiceSpec{
 			Selector: map[string]string{
@@ -520,7 +504,7 @@ func (s *S) TestServiceManagerDeployServiceNoExposedPorts(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -537,7 +521,7 @@ func (s *S) TestServiceManagerDeployServiceNoExposedPorts(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -560,7 +544,7 @@ func (s *S) TestServiceManagerDeployServiceNoExposedPortsRemoveExistingService(c
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -568,7 +552,7 @@ func (s *S) TestServiceManagerDeployServiceNoExposedPortsRemoveExistingService(c
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -596,7 +580,7 @@ func (s *S) TestServiceManagerDeployServiceNoExposedPortsRemoveExistingService(c
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -613,7 +597,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -639,10 +623,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 				{Start: true}, {Increment: 2}, {Stop: true},
 			},
 			fn: func(dep *appsv1.Deployment) {
-				c.Assert(*dep.Spec.Replicas, check.Equals, int32(0))
-				ls := labelSetFromMeta(&dep.ObjectMeta)
-				c.Assert(ls.AppReplicas(), check.Equals, 3)
-				c.Assert(ls.IsStopped(), check.Equals, true)
+				c.Assert(dep, check.IsNil)
 			},
 		},
 		{
@@ -659,7 +640,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 				{Start: true}, {Increment: 2}, {Stop: true}, {Start: true},
 			},
 			fn: func(dep *appsv1.Deployment) {
-				c.Assert(*dep.Spec.Replicas, check.Equals, int32(3))
+				c.Assert(*dep.Spec.Replicas, check.Equals, int32(1))
 				ls := labelSetFromMeta(&dep.ObjectMeta)
 				c.Assert(ls.IsStopped(), check.Equals, false)
 			},
@@ -678,7 +659,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 				{Start: true}, {Increment: 2}, {Stop: true}, {Restart: true},
 			},
 			fn: func(dep *appsv1.Deployment) {
-				c.Assert(*dep.Spec.Replicas, check.Equals, int32(3))
+				c.Assert(*dep.Spec.Replicas, check.Equals, int32(1))
 				ls := labelSetFromMeta(&dep.ObjectMeta)
 				c.Assert(ls.IsStopped(), check.Equals, false)
 			},
@@ -697,10 +678,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 				{Start: true}, {Increment: 2}, {Stop: true}, {},
 			},
 			fn: func(dep *appsv1.Deployment) {
-				c.Assert(*dep.Spec.Replicas, check.Equals, int32(0))
-				ls := labelSetFromMeta(&dep.ObjectMeta)
-				c.Assert(ls.AppReplicas(), check.Equals, 3)
-				c.Assert(ls.IsStopped(), check.Equals, true)
+				c.Assert(dep, check.IsNil)
 			},
 		},
 		{
@@ -726,7 +704,7 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 	for i, tt := range tests {
 		c.Logf("test %d", i)
 		for _, s := range tt.states {
-			err = servicecommon.RunServicePipeline(&m, version, provision.DeployArgs{
+			err = servicecommon.RunServicePipeline(context.TODO(), &m, version.Version(), provision.DeployArgs{
 				App:     a,
 				Version: version,
 			}, servicecommon.ProcessSpec{
@@ -739,12 +717,12 @@ func (s *S) TestServiceManagerDeployServiceUpdateStates(c *check.C) {
 		nsName, err := s.client.AppNamespace(a)
 		c.Assert(err, check.IsNil)
 		dep, err = s.client.Clientset.AppsV1().Deployments(nsName).Get("myapp-p1", metav1.GetOptions{})
-		c.Assert(err, check.IsNil)
+		c.Assert(err == nil || k8sErrors.IsNotFound(err), check.Equals, true)
 		waitDep()
 		tt.fn(dep)
-		err = cleanupDeployment(s.clusterClient, a, "p1", version)
+		err = cleanupDeployment(context.TODO(), s.clusterClient, a, "p1", version.Version())
 		c.Assert(err, check.IsNil)
-		err = cleanupDeployment(s.clusterClient, a, "p2", version)
+		err = cleanupDeployment(context.TODO(), s.clusterClient, a, "p2", version.Version())
 		c.Assert(err, check.IsNil)
 	}
 }
@@ -754,13 +732,12 @@ func (s *S) TestServiceManagerDeployServiceWithHC(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	tests := []struct {
 		hc                provTypes.TsuruYamlHealthcheck
 		expectedLiveness  *apiv1.Probe
 		expectedReadiness *apiv1.Probe
-		expectedLifecycle *apiv1.Lifecycle
 	}{
 		{},
 		{
@@ -778,6 +755,50 @@ func (s *S) TestServiceManagerDeployServiceWithHC(c *check.C) {
 						Port:        intstr.FromInt(8888),
 						Scheme:      apiv1.URISchemeHTTPS,
 						HTTPHeaders: []apiv1.HTTPHeader{},
+					},
+				},
+			},
+		},
+		{
+			hc: provTypes.TsuruYamlHealthcheck{
+				Path:   "/hc",
+				Scheme: "https",
+				Command: []string{
+					"cat",
+					"/tmp/healthy",
+				},
+			},
+			expectedReadiness: &apiv1.Probe{
+				PeriodSeconds:    10,
+				FailureThreshold: 3,
+				TimeoutSeconds:   60,
+				Handler: apiv1.Handler{
+					HTTPGet: &apiv1.HTTPGetAction{
+						Path:        "/hc",
+						Port:        intstr.FromInt(8888),
+						Scheme:      apiv1.URISchemeHTTPS,
+						HTTPHeaders: []apiv1.HTTPHeader{},
+					},
+				},
+			},
+		},
+		{
+			hc: provTypes.TsuruYamlHealthcheck{
+				Command: []string{
+					"cat",
+					"/tmp/healthy",
+				},
+			},
+			expectedReadiness: &apiv1.Probe{
+				PeriodSeconds:    10,
+				FailureThreshold: 3,
+				TimeoutSeconds:   60,
+				Handler: apiv1.Handler{
+					Exec: &apiv1.ExecAction{
+						Command: []string{
+							"cat",
+							"/tmp/healthy",
+						},
 					},
 				},
 			},
@@ -890,7 +911,7 @@ func (s *S) TestServiceManagerDeployServiceWithHC(c *check.C) {
 			"healthcheck": tt.hc,
 		})
 		c.Assert(err, check.IsNil)
-		err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+		err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 			App:     a,
 			Version: version,
 		}, servicecommon.ProcessSpec{
@@ -905,12 +926,10 @@ func (s *S) TestServiceManagerDeployServiceWithHC(c *check.C) {
 		c.Assert(err, check.IsNil)
 		c.Assert(dep.Spec.Template.Spec.Containers[0].ReadinessProbe, check.DeepEquals, tt.expectedReadiness)
 		c.Assert(dep.Spec.Template.Spec.Containers[0].LivenessProbe, check.DeepEquals, tt.expectedLiveness)
-		c.Assert(dep.Spec.Template.Spec.Containers[0].Lifecycle, check.DeepEquals, tt.expectedLifecycle)
 		dep, err = s.client.Clientset.AppsV1().Deployments(nsName).Get("myapp-p2", metav1.GetOptions{})
 		c.Assert(err, check.IsNil)
 		c.Assert(dep.Spec.Template.Spec.Containers[0].ReadinessProbe, check.IsNil)
 		c.Assert(dep.Spec.Template.Spec.Containers[0].LivenessProbe, check.IsNil)
-		c.Assert(dep.Spec.Template.Spec.Containers[0].Lifecycle, check.IsNil)
 	}
 }
 
@@ -919,7 +938,7 @@ func (s *S) TestServiceManagerDeployServiceWithRestartHooks(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -934,7 +953,7 @@ func (s *S) TestServiceManagerDeployServiceWithRestartHooks(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -953,6 +972,11 @@ func (s *S) TestServiceManagerDeployServiceWithRestartHooks(c *check.C) {
 				Command: []string{"sh", "-c", "after cmd1 && after cmd2"},
 			},
 		},
+		PreStop: &apiv1.Handler{
+			Exec: &apiv1.ExecAction{
+				Command: []string{"sh", "-c", "sleep 10 || true"},
+			},
+		},
 	}
 	c.Assert(dep.Spec.Template.Spec.Containers[0].Lifecycle, check.DeepEquals, expectedLifecycle)
 	cmd := dep.Spec.Template.Spec.Containers[0].Command
@@ -966,12 +990,90 @@ func (s *S) TestServiceManagerDeployServiceWithRestartHooks(c *check.C) {
 	c.Assert(cmd[2], check.Matches, `.*before cmd1 && before cmd2 && exec proc2$`)
 }
 
+func (s *S) TestServiceManagerDeployServiceWithCustomSleep(c *check.C) {
+	tests := []struct {
+		value         string
+		expectedLife  *apiv1.Lifecycle
+		expectedGrace int64
+	}{
+		{
+			value:         "",
+			expectedGrace: 40,
+			expectedLife: &apiv1.Lifecycle{
+				PreStop: &apiv1.Handler{
+					Exec: &apiv1.ExecAction{
+						Command: []string{"sh", "-c", "sleep 10 || true"},
+					},
+				},
+			},
+		},
+		{
+			value:         "invalid",
+			expectedGrace: 40,
+			expectedLife: &apiv1.Lifecycle{
+				PreStop: &apiv1.Handler{
+					Exec: &apiv1.ExecAction{
+						Command: []string{"sh", "-c", "sleep 10 || true"},
+					},
+				},
+			},
+		},
+		{
+			value:         "7",
+			expectedGrace: 37,
+			expectedLife: &apiv1.Lifecycle{
+				PreStop: &apiv1.Handler{
+					Exec: &apiv1.ExecAction{
+						Command: []string{"sh", "-c", "sleep 7 || true"},
+					},
+				},
+			},
+		},
+		{
+			value:         "0",
+			expectedGrace: 30,
+			expectedLife:  &apiv1.Lifecycle{},
+		},
+	}
+
+	waitDep := s.mock.DeploymentReactions(c)
+	defer waitDep()
+	m := serviceManager{client: s.clusterClient}
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	version := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"web": "proc1",
+		},
+	})
+	c.Assert(err, check.IsNil)
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+
+	for _, tt := range tests {
+		s.clusterClient.CustomData[preStopSleepKey] = tt.value
+		err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
+			App:     a,
+			Version: version,
+		}, servicecommon.ProcessSpec{
+			"web": servicecommon.ProcessState{Start: true},
+		})
+		c.Assert(err, check.IsNil)
+		waitDep()
+		dep, err := s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-web", metav1.GetOptions{})
+		c.Assert(err, check.IsNil)
+		c.Assert(dep.Spec.Template.Spec.Containers[0].Lifecycle, check.DeepEquals, tt.expectedLife)
+		c.Assert(dep.Spec.Template.Spec.TerminationGracePeriodSeconds, check.DeepEquals, &tt.expectedGrace)
+	}
+}
+
 func (s *S) TestServiceManagerDeployServiceWithKubernetesPorts(c *check.C) {
 	waitDep := s.mock.DeploymentReactions(c)
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1011,7 +1113,7 @@ func (s *S) TestServiceManagerDeployServiceWithKubernetesPorts(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1097,7 +1199,7 @@ func (s *S) TestServiceManagerDeployServiceWithKubernetesPortsDuplicatedProcess(
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1124,7 +1226,7 @@ func (s *S) TestServiceManagerDeployServiceWithKubernetesPortsDuplicatedProcess(
 	})
 	c.Assert(err, check.IsNil)
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1138,7 +1240,7 @@ func (s *S) TestServiceManagerDeployServiceWithZeroKubernetesPorts(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1156,7 +1258,7 @@ func (s *S) TestServiceManagerDeployServiceWithZeroKubernetesPorts(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1187,7 +1289,7 @@ func (s *S) TestServiceManagerDeployServiceWithRegistryAuth(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1195,7 +1297,7 @@ func (s *S) TestServiceManagerDeployServiceWithRegistryAuth(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1257,7 +1359,7 @@ func (s *S) TestServiceManagerDeployServiceProgressMessages(c *check.C) {
 	})
 	watchCalled := make(chan struct{})
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -1286,7 +1388,7 @@ func (s *S) TestServiceManagerDeployServiceProgressMessages(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1306,7 +1408,7 @@ func (s *S) TestServiceManagerDeployServiceFirstDeployDeleteDeploymentOnRollback
 	buf := bytes.NewBuffer(nil)
 	m := serviceManager{client: s.clusterClient, writer: buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.New(&event.Opts{
 		Target:        event.Target{Type: event.TargetTypeApp, Value: a.GetName()},
@@ -1336,12 +1438,16 @@ func (s *S) TestServiceManagerDeployServiceFirstDeployDeleteDeploymentOnRollback
 		if dep, ok := obj.(*appsv1.Deployment); ok {
 			rev, _ := strconv.Atoi(dep.Annotations[replicaDepRevision])
 			rev++
-			dep.Annotations[replicaDepRevision] = strconv.Itoa(rev)
+			dep.Annotations = map[string]string{
+				replicaDepRevision: strconv.Itoa(rev),
+			}
 			dep.Status.UnavailableReplicas = 1
 			deployCreated <- struct{}{}
 		}
 		return false, nil, nil
 	})
+	ctx, cancel := evt.CancelableContext(context.TODO())
+	defer cancel()
 	go func(id string) {
 		<-deployCreated
 		evtDB, errCancel := event.GetByHexID(id)
@@ -1349,7 +1455,7 @@ func (s *S) TestServiceManagerDeployServiceFirstDeployDeleteDeploymentOnRollback
 		errCancel = evtDB.TryCancel("Because i want.", "admin@admin.com")
 		c.Assert(errCancel, check.IsNil)
 	}(evt.UniqueID.Hex())
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(ctx, &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 		Event:   evt,
@@ -1374,7 +1480,7 @@ func (s *S) TestServiceManagerDeployServiceCancelRollback(c *check.C) {
 	buf := bytes.NewBuffer(nil)
 	m := serviceManager{client: s.clusterClient, writer: buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.New(&event.Opts{
 		Target:        event.Target{Type: event.TargetTypeApp, Value: a.GetName()},
@@ -1391,7 +1497,7 @@ func (s *S) TestServiceManagerDeployServiceCancelRollback(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 		Event:   evt,
@@ -1406,12 +1512,16 @@ func (s *S) TestServiceManagerDeployServiceCancelRollback(c *check.C) {
 		if dep, ok := obj.(*appsv1.Deployment); ok {
 			rev, _ := strconv.Atoi(dep.Annotations[replicaDepRevision])
 			rev++
-			dep.Annotations[replicaDepRevision] = strconv.Itoa(rev)
+			dep.Annotations = map[string]string{
+				replicaDepRevision: strconv.Itoa(rev),
+			}
 			dep.Status.UnavailableReplicas = 1
 			deployCreated <- struct{}{}
 		}
 		return false, nil, nil
 	})
+	ctx, cancel := evt.CancelableContext(context.TODO())
+	defer cancel()
 	go func(id string) {
 		<-deployCreated
 		evtDB, errCancel := event.GetByHexID(id)
@@ -1419,7 +1529,7 @@ func (s *S) TestServiceManagerDeployServiceCancelRollback(c *check.C) {
 		errCancel = evtDB.TryCancel("Because i want.", "admin@admin.com")
 		c.Assert(errCancel, check.IsNil)
 	}(evt.UniqueID.Hex())
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(ctx, &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 		Event:   evt,
@@ -1450,7 +1560,7 @@ func (s *S) TestServiceManagerDeployServiceWithNodeContainers(c *check.C) {
 	c.Assert(err, check.IsNil)
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, s.user)
+	err = app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1458,7 +1568,7 @@ func (s *S) TestServiceManagerDeployServiceWithNodeContainers(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1481,7 +1591,7 @@ func (s *S) TestServiceManagerDeployServiceWithHCInvalidMethod(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1494,7 +1604,7 @@ func (s *S) TestServiceManagerDeployServiceWithHCInvalidMethod(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1510,7 +1620,7 @@ func (s *S) TestServiceManagerDeployServiceWithUID(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1518,7 +1628,7 @@ func (s *S) TestServiceManagerDeployServiceWithUID(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1541,7 +1651,7 @@ func (s *S) TestServiceManagerDeployServiceWithResourceRequirements(c *check.C) 
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	a.Plan = appTypes.Plan{Memory: 1024}
 	version := newCommittedVersion(c, a, map[string]interface{}{
@@ -1550,7 +1660,7 @@ func (s *S) TestServiceManagerDeployServiceWithResourceRequirements(c *check.C) 
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1565,10 +1675,12 @@ func (s *S) TestServiceManagerDeployServiceWithResourceRequirements(c *check.C) 
 	expectedMemory := resource.NewQuantity(1024, resource.BinarySI)
 	c.Assert(dep.Spec.Template.Spec.Containers[0].Resources, check.DeepEquals, apiv1.ResourceRequirements{
 		Limits: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemory,
+			apiv1.ResourceMemory:           *expectedMemory,
+			apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
 		},
 		Requests: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemory,
+			apiv1.ResourceMemory:           *expectedMemory,
+			apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
 		},
 	})
 }
@@ -1579,7 +1691,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideOvercommitFactor(c *ch
 	s.clusterClient.CustomData[overcommitClusterKey] = "3"
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	a.Plan = appTypes.Plan{Memory: 1024}
 	version := newCommittedVersion(c, a, map[string]interface{}{
@@ -1588,7 +1700,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideOvercommitFactor(c *ch
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1604,10 +1716,12 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideOvercommitFactor(c *ch
 	expectedMemoryRequest := resource.NewQuantity(341, resource.BinarySI)
 	c.Assert(dep.Spec.Template.Spec.Containers[0].Resources, check.DeepEquals, apiv1.ResourceRequirements{
 		Limits: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemory,
+			apiv1.ResourceMemory:           *expectedMemory,
+			apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
 		},
 		Requests: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemoryRequest,
+			apiv1.ResourceMemory:           *expectedMemoryRequest,
+			apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
 		},
 	})
 }
@@ -1619,7 +1733,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterPoolOvercommitFactor(c *ch
 	s.clusterClient.CustomData["test-default:"+overcommitClusterKey] = "2"
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	a.Plan = appTypes.Plan{Memory: 1024}
 	version := newCommittedVersion(c, a, map[string]interface{}{
@@ -1628,7 +1742,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterPoolOvercommitFactor(c *ch
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1644,12 +1758,110 @@ func (s *S) TestServiceManagerDeployServiceWithClusterPoolOvercommitFactor(c *ch
 	expectedMemoryRequest := resource.NewQuantity(512, resource.BinarySI)
 	c.Assert(dep.Spec.Template.Spec.Containers[0].Resources, check.DeepEquals, apiv1.ResourceRequirements{
 		Limits: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemory,
+			apiv1.ResourceMemory:           *expectedMemory,
+			apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
 		},
 		Requests: apiv1.ResourceList{
-			apiv1.ResourceMemory: *expectedMemoryRequest,
+			apiv1.ResourceMemory:           *expectedMemoryRequest,
+			apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
 		},
 	})
+}
+
+func (s *S) TestServiceManagerDeployServiceWithCustomEphemeralStorageLimit(c *check.C) {
+	tests := []struct {
+		key      string
+		value    string
+		expected apiv1.ResourceRequirements
+	}{
+		{
+			expected: apiv1.ResourceRequirements{
+				Limits: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
+				},
+				Requests: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+				},
+			},
+		},
+		{
+			key:   ephemeralStorageKey,
+			value: "9Mi",
+			expected: apiv1.ResourceRequirements{
+				Limits: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: resource.MustParse("9Mi"),
+				},
+				Requests: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+				},
+			},
+		},
+		{
+			key:   "test-default:" + ephemeralStorageKey,
+			value: "1Mi",
+			expected: apiv1.ResourceRequirements{
+				Limits: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: resource.MustParse("1Mi"),
+				},
+				Requests: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+				},
+			},
+		},
+		{
+			key:   "other:" + ephemeralStorageKey,
+			value: "1Mi",
+			expected: apiv1.ResourceRequirements{
+				Limits: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: resource.MustParse("100Mi"),
+				},
+				Requests: apiv1.ResourceList{
+					apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+				},
+			},
+		},
+		{
+			key:   ephemeralStorageKey,
+			value: "0",
+			expected: apiv1.ResourceRequirements{
+				Limits:   apiv1.ResourceList{},
+				Requests: apiv1.ResourceList{},
+			},
+		},
+	}
+	waitDep := s.mock.DeploymentReactions(c)
+	defer waitDep()
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	version := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
+		},
+	})
+	c.Assert(err, check.IsNil)
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+
+	for i, tt := range tests {
+		c.Logf("test %d", i)
+		for k := range s.clusterClient.CustomData {
+			delete(s.clusterClient.CustomData, k)
+		}
+		s.clusterClient.CustomData[tt.key] = tt.value
+		m := serviceManager{client: s.clusterClient}
+		err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
+			App:     a,
+			Version: version,
+		}, servicecommon.ProcessSpec{
+			"p1": servicecommon.ProcessState{Start: true},
+		})
+		c.Assert(err, check.IsNil)
+		waitDep()
+		dep, err := s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+		c.Assert(err, check.IsNil)
+		c.Assert(dep.Spec.Template.Spec.Containers[0].Resources, check.DeepEquals, tt.expected)
+	}
 }
 
 func (s *S) TestServiceManagerDeployServiceWithClusterWideMaxSurgeAndUnavailable(c *check.C) {
@@ -1659,7 +1871,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideMaxSurgeAndUnavailable
 	s.clusterClient.CustomData[maxUnavailableKey] = "2"
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	a.Plan = appTypes.Plan{Memory: 1024}
 	version := newCommittedVersion(c, a, map[string]interface{}{
@@ -1668,7 +1880,7 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideMaxSurgeAndUnavailable
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -1688,12 +1900,41 @@ func (s *S) TestServiceManagerDeployServiceWithClusterWideMaxSurgeAndUnavailable
 	})
 }
 
+func (s *S) TestServiceManagerDeploySinglePoolEnable(c *check.C) {
+	waitDep := s.mock.DeploymentReactions(c)
+	defer waitDep()
+	s.clusterClient.CustomData[singlePoolKey] = "true"
+	m := serviceManager{client: s.clusterClient}
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	version := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
+		},
+	})
+	c.Assert(err, check.IsNil)
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
+		App:     a,
+		Version: version,
+	}, servicecommon.ProcessSpec{
+		"p1": servicecommon.ProcessState{Start: true},
+	})
+	c.Assert(err, check.IsNil)
+	waitDep()
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+	dep, err := s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(dep.Spec.Template.Spec.NodeSelector, check.DeepEquals, map[string]string{})
+}
+
 func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 	waitDep := s.mock.DeploymentReactions(c)
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version1 := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1706,7 +1947,7 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 		},
 	})
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version1,
 	}, servicecommon.ProcessSpec{
@@ -1715,7 +1956,7 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 	c.Assert(err, check.IsNil)
 	waitDep()
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:              a,
 		Version:          version2,
 		PreserveVersions: true,
@@ -1747,26 +1988,18 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 		"tsuru.io/is-isolated-run-version": "false",
 		"tsuru.io/app-name":                "myapp",
 		"tsuru.io/app-process":             "p1",
-		"tsuru.io/app-process-replicas":    "1",
 		"tsuru.io/app-platform":            "",
 		"tsuru.io/app-pool":                "test-default",
-		"tsuru.io/app-version":             "2",
 		"tsuru.io/provisioner":             "kubernetes",
 		"tsuru.io/builder":                 "",
 		"app":                              "myapp-p1",
-		"version":                          "v2",
 	}
 	podLabels := make(map[string]string)
 	for k, v := range depLabels {
-		if k == "tsuru.io/app-process-replicas" {
-			continue
-		}
 		podLabels[k] = v
 	}
-	annotations := map[string]string{
-		"tsuru.io/router-type": "fake",
-		"tsuru.io/router-name": "fake",
-	}
+	podLabels["tsuru.io/app-version"] = "2"
+	podLabels["version"] = "v2"
 	nsName, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
 	one := int32(1)
@@ -1779,7 +2012,7 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 			Name:        "myapp-p1-v2",
 			Namespace:   nsName,
 			Labels:      depLabels,
-			Annotations: annotations,
+			Annotations: map[string]string{},
 		},
 		Status: appsv1.DeploymentStatus{
 			UpdatedReplicas: 1,
@@ -1806,8 +2039,7 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 			},
 			Template: apiv1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      podLabels,
-					Annotations: annotations,
+					Labels: podLabels,
 				},
 				Spec: apiv1.PodSpec{
 					EnableServiceLinks: func(b bool) *bool { return &b }(false),
@@ -1818,8 +2050,9 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 					NodeSelector: map[string]string{
 						"tsuru.io/pool": "test-default",
 					},
-					RestartPolicy: "Always",
-					Subdomain:     "myapp-p1-units",
+					RestartPolicy:                 "Always",
+					Subdomain:                     "myapp-p1-units",
+					TerminationGracePeriodSeconds: func(v int64) *int64 { return &v }(40),
 					Containers: []apiv1.Container{
 						{
 							Name:  "myapp-p1-v2",
@@ -1839,11 +2072,22 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 								{Name: "PORT_p1", Value: "8888"},
 							},
 							Resources: apiv1.ResourceRequirements{
-								Limits:   apiv1.ResourceList{},
-								Requests: apiv1.ResourceList{},
+								Limits: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
+								},
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+								},
 							},
 							Ports: []apiv1.ContainerPort{
 								{ContainerPort: 8888},
+							},
+							Lifecycle: &apiv1.Lifecycle{
+								PreStop: &apiv1.Handler{
+									Exec: &apiv1.ExecAction{
+										Command: []string{"sh", "-c", "sleep 10 || true"},
+									},
+								},
 							},
 						},
 					},
@@ -1873,10 +2117,6 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 				"tsuru.io/builder":                 "",
 				"version":                          "v2",
 			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
-			},
 		},
 		Spec: apiv1.ServiceSpec{
 			Selector: map[string]string{
@@ -1900,7 +2140,7 @@ func (s *S) TestServiceManagerDeployServiceWithPreserveVersions(c *check.C) {
 	}
 	c.Assert(v2Svc, check.DeepEquals, expectedSvc, check.Commentf("Diff:\n%s\n", strings.Join(pretty.Diff(v2Svc, expectedSvc), "\n")))
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:              a,
 		Version:          version2,
 		PreserveVersions: true,
@@ -1927,7 +2167,7 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeploy(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1937,7 +2177,7 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeploy(c *check.C) {
 
 	legacyDep, legacySvc := s.createLegacyDeployment(c, a, version)
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:              a,
 		Version:          version,
 		PreserveVersions: true,
@@ -1952,8 +2192,8 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeploy(c *check.C) {
 
 	expectedDep := legacyDep.DeepCopy()
 	expectedDep.Labels["tsuru.io/restarts"] = "1"
-	expectedDep.Labels["tsuru.io/app-version"] = "1"
 	expectedDep.Labels["tsuru.io/is-routable"] = "true"
+	delete(expectedDep.Labels, "version")
 	expectedDep.Spec.Template.ObjectMeta.Labels["tsuru.io/restarts"] = "1"
 	expectedDep.Spec.Template.ObjectMeta.Labels["tsuru.io/app-version"] = "1"
 	expectedDep.Spec.Template.ObjectMeta.Labels["tsuru.io/is-routable"] = "true"
@@ -2001,7 +2241,7 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeployAndNewVersion(c *chec
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version1 := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -2016,7 +2256,7 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeployAndNewVersion(c *chec
 
 	legacyDep, legacySvc := s.createLegacyDeployment(c, a, version1)
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:              a,
 		Version:          version2,
 		PreserveVersions: true,
@@ -2030,8 +2270,8 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeployAndNewVersion(c *chec
 	c.Assert(err, check.IsNil)
 
 	expectedDepBase := legacyDep.DeepCopy()
-	expectedDepBase.Labels["tsuru.io/app-version"] = "1"
 	expectedDepBase.Labels["tsuru.io/is-routable"] = "true"
+	delete(expectedDepBase.Labels, "version")
 	expectedDepBase.Spec.Template.ObjectMeta.Labels["tsuru.io/app-version"] = "1"
 	expectedDepBase.Spec.Template.ObjectMeta.Labels["tsuru.io/is-routable"] = "true"
 	expectedDepBase.Spec.Template.Spec.Containers[0].Env = []apiv1.EnvVar{
@@ -2045,9 +2285,8 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeployAndNewVersion(c *chec
 
 	expectedDepV2 := legacyDep.DeepCopy()
 	expectedDepV2.Name = "myapp-p1-v2"
-	expectedDepV2.Labels["version"] = "v2"
-	expectedDepV2.Labels["tsuru.io/app-version"] = "2"
 	expectedDepV2.Labels["tsuru.io/is-isolated-run-version"] = "false"
+	delete(expectedDepV2.Labels, "version")
 	delete(expectedDepV2.Labels, "tsuru.io/is-routable")
 	delete(expectedDepV2.Labels, "tsuru.io/is-isolated-run")
 	expectedDepV2.Spec.Selector.MatchLabels["tsuru.io/app-version"] = "2"
@@ -2115,10 +2354,90 @@ func (s *S) TestServiceManagerDeployServiceWithLegacyDeployAndNewVersion(c *chec
 	c.Check(svcv2, check.DeepEquals, expectedSvcV2, check.Commentf("Diff:\n%s\n", strings.Join(pretty.Diff(svcv2, expectedSvcV2), "\n")))
 }
 
+func (s *S) TestServiceManagerDeployServiceWithRemovedOldVersion(c *check.C) {
+	waitDep := s.mock.DeploymentReactions(c)
+	defer waitDep()
+	m := serviceManager{client: s.clusterClient}
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	version1 := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
+			"p2": "cm2",
+		},
+	})
+	version2 := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
+		},
+	})
+
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
+		App:     a,
+		Version: version1,
+	}, servicecommon.ProcessSpec{
+		"p1": servicecommon.ProcessState{Start: true},
+		"p2": servicecommon.ProcessState{Start: true},
+	})
+	c.Assert(err, check.IsNil)
+	waitDep()
+
+	err = servicemanager.AppVersion.DeleteVersionIDs(context.TODO(), a.Name, []int{version1.Version()})
+	c.Assert(err, check.IsNil)
+
+	dep, err := s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Check(dep.Spec.Template.Labels["tsuru.io/app-version"], check.Equals, "1")
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p2", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p2-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
+		App:     a,
+		Version: version2,
+	}, servicecommon.ProcessSpec{
+		"p1": servicecommon.ProcessState{Start: true},
+	})
+	c.Assert(err, check.IsNil)
+	waitDep()
+
+	dep, err = s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Check(dep.Spec.Template.Labels["tsuru.io/app-version"], check.Equals, "2")
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p1-v2", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.Clientset.AppsV1().Deployments(ns).Get("myapp-p2", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p2", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+
+	_, err = s.client.Clientset.CoreV1().Services(ns).Get("myapp-p2-v1", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+}
+
 func (s *S) TestCreateBuildPodContainers(c *check.C) {
 	a, _, rollback := s.mock.DefaultReactions(c)
 	defer rollback()
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	err = createBuildPod(context.Background(), createPodParams{
 		client:            s.clusterClient,
@@ -2183,7 +2502,7 @@ func (s *S) TestCreateBuildPodContainers(c *check.C) {
 func (s *S) TestCreateDeployPodContainers(c *check.C) {
 	a, _, rollback := s.mock.DefaultReactions(c)
 	defer rollback()
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, a, nil)
 	err = createDeployPod(context.Background(), createPodParams{
@@ -2208,24 +2527,21 @@ func (s *S) TestCreateDeployPodContainers(c *check.C) {
 			Name:      "myapp-v1-deploy",
 			Namespace: ns,
 			Labels: map[string]string{
-				"tsuru.io/is-deploy":            "false",
-				"tsuru.io/is-stopped":           "false",
-				"tsuru.io/is-tsuru":             "true",
-				"tsuru.io/app-name":             "myapp",
-				"tsuru.io/is-isolated-run":      "false",
-				"tsuru.io/builder":              "",
-				"tsuru.io/app-process":          "",
-				"tsuru.io/is-build":             "true",
-				"tsuru.io/app-platform":         "python",
-				"tsuru.io/is-service":           "true",
-				"tsuru.io/app-process-replicas": "0",
-				"tsuru.io/app-pool":             "test-default",
-				"tsuru.io/provisioner":          "kubernetes",
+				"tsuru.io/is-deploy":       "false",
+				"tsuru.io/is-stopped":      "false",
+				"tsuru.io/is-tsuru":        "true",
+				"tsuru.io/app-name":        "myapp",
+				"tsuru.io/is-isolated-run": "false",
+				"tsuru.io/builder":         "",
+				"tsuru.io/app-process":     "",
+				"tsuru.io/is-build":        "true",
+				"tsuru.io/app-platform":    "python",
+				"tsuru.io/is-service":      "true",
+				"tsuru.io/app-pool":        "test-default",
+				"tsuru.io/provisioner":     "kubernetes",
 			},
 			Annotations: map[string]string{
 				"tsuru.io/build-image": version.BaseImageName(),
-				"tsuru.io/router-name": "fake",
-				"tsuru.io/router-type": "fake",
 			},
 		},
 		Spec: apiv1.PodSpec{
@@ -2307,7 +2623,7 @@ func (s *S) TestCreateDeployPodContainersWithRegistryAuth(c *check.C) {
 	defer config.Unset("docker:registry-auth:password")
 	a, _, rollback := s.mock.DefaultReactions(c)
 	defer rollback()
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, a, nil)
 	err = createDeployPod(context.Background(), createPodParams{
@@ -2332,24 +2648,21 @@ func (s *S) TestCreateDeployPodContainersWithRegistryAuth(c *check.C) {
 			Name:      "myapp-v1-deploy",
 			Namespace: ns,
 			Labels: map[string]string{
-				"tsuru.io/is-deploy":            "false",
-				"tsuru.io/is-stopped":           "false",
-				"tsuru.io/is-tsuru":             "true",
-				"tsuru.io/app-name":             "myapp",
-				"tsuru.io/is-isolated-run":      "false",
-				"tsuru.io/builder":              "",
-				"tsuru.io/app-process":          "",
-				"tsuru.io/is-build":             "true",
-				"tsuru.io/app-platform":         "python",
-				"tsuru.io/is-service":           "true",
-				"tsuru.io/app-process-replicas": "0",
-				"tsuru.io/app-pool":             "test-default",
-				"tsuru.io/provisioner":          "kubernetes",
+				"tsuru.io/is-deploy":       "false",
+				"tsuru.io/is-stopped":      "false",
+				"tsuru.io/is-tsuru":        "true",
+				"tsuru.io/app-name":        "myapp",
+				"tsuru.io/is-isolated-run": "false",
+				"tsuru.io/builder":         "",
+				"tsuru.io/app-process":     "",
+				"tsuru.io/is-build":        "true",
+				"tsuru.io/app-platform":    "python",
+				"tsuru.io/is-service":      "true",
+				"tsuru.io/app-pool":        "test-default",
+				"tsuru.io/provisioner":     "kubernetes",
 			},
 			Annotations: map[string]string{
 				"tsuru.io/build-image": version.BaseImageName(),
-				"tsuru.io/router-name": "fake",
-				"tsuru.io/router-type": "fake",
 			},
 		},
 		Spec: apiv1.PodSpec{
@@ -2402,6 +2715,32 @@ trap end EXIT
 mkdir -p $(dirname /dev/null) && cat >/dev/null && tsuru_unit_agent   myapp deploy-only`)
 }
 
+func (s *S) TestCreateDeployPodContainersOnSinglePool(c *check.C) {
+	s.mock.IgnorePool = true
+	a, _, rollback := s.mock.DefaultReactions(c)
+	defer rollback()
+	s.clusterClient.CustomData[singlePoolKey] = "true"
+	err := s.p.Provision(context.TODO(), a)
+	c.Assert(err, check.IsNil)
+	version := newVersion(c, a, nil)
+	err = createDeployPod(context.Background(), createPodParams{
+		client:            s.clusterClient,
+		app:               a,
+		sourceImage:       version.BuildImageName(),
+		destinationImages: []string{version.BaseImageName()},
+		inputFile:         "/dev/null",
+		podName:           "myapp-v1-deploy",
+	})
+	s.mock.IgnorePool = false
+	c.Assert(err, check.IsNil)
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+	pods, err := s.client.CoreV1().Pods(ns).List(metav1.ListOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(pods.Items, check.HasLen, 1)
+	c.Assert(pods.Items[0].Spec.NodeSelector, check.DeepEquals, map[string]string{})
+}
+
 func (s *S) TestCreateImageBuildPodContainer(c *check.C) {
 	_, rollback := s.mock.NoAppReactions(c)
 	defer rollback()
@@ -2436,10 +2775,27 @@ func (s *S) TestCreateImageBuildPodContainer(c *check.C) {
 
 }
 
+func (s *S) TestCreateImageBuildPodContainerOnSinglePool(c *check.C) {
+	_, rollback := s.mock.NoAppReactions(c)
+	defer rollback()
+	s.clusterClient.CustomData[singlePoolKey] = "true"
+	err := createImageBuildPod(context.Background(), createPodParams{
+		client:            s.clusterClient,
+		podName:           "myplatform-image-build",
+		destinationImages: []string{"destimg"},
+		inputFile:         "/data/context.tar.gz",
+	})
+	c.Assert(err, check.IsNil)
+	pods, err := s.client.CoreV1().Pods(s.client.Namespace()).List(metav1.ListOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(pods.Items, check.HasLen, 1)
+	c.Assert(pods.Items[0].Spec.NodeSelector, check.DeepEquals, map[string]string(nil))
+}
+
 func (s *S) TestCreateDeployPodProgress(c *check.C) {
 	a, _, rollback := s.mock.DefaultReactions(c)
 	defer rollback()
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	fakeWatcher := watch.NewFakeWithChanSize(2, false)
 	fakeWatcher.Add(&apiv1.Event{
@@ -2519,7 +2875,7 @@ func (s *S) TestCreateDeployPodAttachFail(c *check.C) {
 	defer config.Unset("kubernetes:attach-after-finish-timeout")
 	a, _, rollback := s.mock.DefaultReactions(c)
 	defer rollback()
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
 	ch := make(chan struct{})
@@ -2549,7 +2905,7 @@ func (s *S) TestServiceManagerDeployServiceWithVolumes(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -2571,11 +2927,11 @@ func (s *S) TestServiceManagerDeployServiceWithVolumes(c *check.C) {
 		Pool:      "test-default",
 		TeamOwner: "admin",
 	}
-	err = v.Create()
+	err = v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	err = v.BindApp(a.GetName(), "/mnt", false)
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -2617,35 +2973,43 @@ func (s *S) TestServiceManagerDeployServiceRollbackFullTimeout(c *check.C) {
 	buf := bytes.Buffer{}
 	m := serviceManager{client: s.clusterClient, writer: &buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
-	version := newCommittedVersion(c, a, map[string]interface{}{
+	version1 := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
 			"p1": "cm1",
-			"p2": "cmd2",
+		},
+	})
+	version2 := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version1,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.IsNil)
+
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
 	waitDep()
-	var rollbackObj *extensions.DeploymentRollback
 	reaction := func(action ktesting.Action) (bool, runtime.Object, error) {
 		obj := action.(ktesting.CreateAction).GetObject()
-		if action.GetSubresource() == "rollback" {
-			rollbackObj = obj.(*extensions.DeploymentRollback)
-			return true, rollbackObj, nil
-		}
 		dep := obj.(*appsv1.Deployment)
 		dep.Status.UnavailableReplicas = 2
 		rev, _ := strconv.Atoi(dep.Annotations[replicaDepRevision])
 		rev++
-		dep.Annotations[replicaDepRevision] = strconv.Itoa(rev)
+		dep.Annotations = map[string]string{
+			replicaDepRevision: strconv.Itoa(rev),
+		}
 		return false, nil, nil
 	}
 	s.client.PrependReactor("create", "deployments", reaction)
@@ -2658,21 +3022,30 @@ func (s *S) TestServiceManagerDeployServiceRollbackFullTimeout(c *check.C) {
 		})
 		return false, nil, nil
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version2,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.ErrorMatches, "(?s).*Pod \"myapp-p1-pod-2-1\" not ready.*")
 	waitDep()
-	c.Assert(rollbackObj, check.DeepEquals, &extensions.DeploymentRollback{
-		Name: "myapp-p1",
-	})
-	c.Assert(buf.String(), check.Matches, `(?s).*---- Updating units \[p1\] \[version 1\] ----.*ROLLING BACK AFTER FAILURE.*`)
-	err = cleanupDeployment(s.clusterClient, a, "p1", version)
+
+	dep, err := s.client.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
 	c.Assert(err, check.IsNil)
-	ns, err := s.client.AppNamespace(a)
+	c.Assert(dep.Spec.Template.ObjectMeta.Labels["tsuru.io/app-version"], check.Equals, "1")
+
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v2", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+
+	c.Assert(buf.String(), check.Matches, `(?s).*---- Updating units \[p1\] \[version 1\] ----.*ROLLING BACK AFTER FAILURE.*`)
+	err = cleanupDeployment(context.TODO(), s.clusterClient, a, "p1", version1.Version())
 	c.Assert(err, check.IsNil)
 	_, err = s.client.CoreV1().Events(ns).Create(&apiv1.Event{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2683,9 +3056,9 @@ func (s *S) TestServiceManagerDeployServiceRollbackFullTimeout(c *check.C) {
 		Message: "my evt message",
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version2,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
@@ -2702,7 +3075,7 @@ func (s *S) TestServiceManagerDeployServiceFullTimeoutResetOnProgress(c *check.C
 	buf := bytes.Buffer{}
 	m := serviceManager{client: s.clusterClient, writer: &buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -2754,7 +3127,7 @@ func (s *S) TestServiceManagerDeployServiceFullTimeoutResetOnProgress(c *check.C
 		}
 	}()
 
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -2775,36 +3148,39 @@ func (s *S) TestServiceManagerDeployServiceRollbackHealthcheckTimeout(c *check.C
 	buf := bytes.Buffer{}
 	m := serviceManager{client: s.clusterClient, writer: &buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
-	version := newCommittedVersion(c, a, map[string]interface{}{
+	version1 := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cm1",
+			"p2": "cmd2",
+		},
+	})
+	version2 := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
 			"p1": "cm1",
 			"p2": "cmd2",
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version1,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.IsNil)
 	waitDep()
-	var rollbackObj *extensions.DeploymentRollback
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
 	reaction := func(action ktesting.Action) (bool, runtime.Object, error) {
 		obj := action.(ktesting.CreateAction).GetObject()
-		if action.GetSubresource() == "rollback" {
-			rollbackObj = obj.(*extensions.DeploymentRollback)
-			return true, rollbackObj, nil
-		}
 		dep := obj.(*appsv1.Deployment)
 		rev, _ := strconv.Atoi(dep.Annotations[replicaDepRevision])
 		rev++
-		dep.Annotations[replicaDepRevision] = strconv.Itoa(rev)
+		dep.Annotations = map[string]string{
+			replicaDepRevision: strconv.Itoa(rev),
+		}
 		dep.Status.UnavailableReplicas = 2
 		labelsCp := make(map[string]string, len(dep.Labels))
 		for k, v := range dep.Spec.Template.Labels {
@@ -2841,19 +3217,21 @@ func (s *S) TestServiceManagerDeployServiceRollbackHealthcheckTimeout(c *check.C
 		})
 		return false, nil, nil
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version2,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.ErrorMatches, "(?s).*Pod \"myapp-p1-pod-2-1\" not ready.*")
 	waitDep()
-	c.Assert(rollbackObj, check.DeepEquals, &extensions.DeploymentRollback{
-		Name: "myapp-p1",
-	})
+
+	dep, err := s.client.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(dep.Spec.Template.ObjectMeta.Labels["tsuru.io/app-version"], check.Equals, "1")
+
 	c.Assert(buf.String(), check.Matches, `(?s).*---- Updating units \[p1\] \[version 1\] ----.*ROLLING BACK AFTER FAILURE.*`)
-	err = cleanupDeployment(s.clusterClient, a, "p1", version)
+	err = cleanupDeployment(context.TODO(), s.clusterClient, a, "p1", version1.Version())
 	c.Assert(err, check.IsNil)
 	_, err = s.client.CoreV1().Events(ns).Create(&apiv1.Event{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2864,9 +3242,9 @@ func (s *S) TestServiceManagerDeployServiceRollbackHealthcheckTimeout(c *check.C
 		Message: "my evt message",
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version2,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
@@ -2884,57 +3262,40 @@ func (s *S) TestServiceManagerDeployServiceRollbackPendingPod(c *check.C) {
 	buf := bytes.Buffer{}
 	m := serviceManager{client: s.clusterClient, writer: &buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
-	version := newCommittedVersion(c, a, map[string]interface{}{
+	version1 := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
 			"p1": "cmd1",
 		},
 	})
-	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	version2 := newCommittedVersion(c, a, map[string]interface{}{
+		"processes": map[string]interface{}{
+			"p1": "cmd1",
+		},
+	})
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version1,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.IsNil)
 	waitDep()
-	var rollbackObj *extensions.DeploymentRollback
-	s.client.PrependReactor("create", "deployments", func(action ktesting.Action) (bool, runtime.Object, error) {
-		obj := action.(ktesting.CreateAction).GetObject()
-		if action.GetSubresource() == "rollback" {
-			rollbackObj = obj.(*extensions.DeploymentRollback)
-			return true, rollbackObj, nil
-		}
-		return false, nil, nil
-	})
 	s.client.PrependReactor("update", "deployments", func(action ktesting.Action) (bool, runtime.Object, error) {
 		obj := action.(ktesting.CreateAction).GetObject()
 		dep := obj.(*appsv1.Deployment)
 		rev, _ := strconv.Atoi(dep.Annotations[replicaDepRevision])
 		rev++
-		dep.Annotations[replicaDepRevision] = strconv.Itoa(rev)
+		dep.Annotations = map[string]string{
+			replicaDepRevision: strconv.Itoa(rev),
+		}
 		dep.Status.UnavailableReplicas = 2
 		dep.Status.ObservedGeneration = 12
 		labelsCp := make(map[string]string, len(dep.Labels))
 		for k, v := range dep.Spec.Template.Labels {
 			labelsCp[k] = v
 		}
-		go func() {
-			ns, nsErr := s.client.AppNamespace(a)
-			c.Assert(nsErr, check.IsNil)
-			_, repErr := s.client.Clientset.AppsV1().ReplicaSets(ns).Create(&appsv1.ReplicaSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   "replica-for-" + dep.Name,
-					Labels: labelsCp,
-					Annotations: map[string]string{
-						"deployment.kubernetes.io/revision": strconv.Itoa(int(dep.Status.ObservedGeneration)),
-					},
-				},
-			})
-			c.Assert(repErr, check.IsNil)
-		}()
 		return false, nil, nil
 	})
 	s.client.PrependReactor("create", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
@@ -2950,17 +3311,21 @@ func (s *S) TestServiceManagerDeployServiceRollbackPendingPod(c *check.C) {
 		})
 		return false, nil, nil
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
-		Version: version,
+		Version: version2,
 	}, servicecommon.ProcessSpec{
 		"p1": servicecommon.ProcessState{Start: true},
 	})
 	c.Assert(err, check.ErrorMatches, "(?s).*Pod \"myapp-p1-pod-2-1\" not ready.*")
 	waitDep()
-	c.Assert(rollbackObj, check.DeepEquals, &extensions.DeploymentRollback{
-		Name: "myapp-p1",
-	})
+
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+
+	dep, err := s.client.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(dep.Spec.Template.ObjectMeta.Labels["tsuru.io/app-version"], check.Equals, "1")
 }
 
 func (s *S) TestServiceManagerDeployServiceNoRollbackFullTimeoutSameRevision(c *check.C) {
@@ -2971,7 +3336,7 @@ func (s *S) TestServiceManagerDeployServiceNoRollbackFullTimeoutSameRevision(c *
 	buf := bytes.Buffer{}
 	m := serviceManager{client: s.clusterClient, writer: &buf}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -3014,7 +3379,7 @@ func (s *S) TestServiceManagerDeployServiceNoRollbackFullTimeoutSameRevision(c *
 		})
 		return false, nil, nil
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -3031,35 +3396,34 @@ func (s *S) TestServiceManagerRemoveService(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
 			"p1": "cm1",
 		},
 	})
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, nil)
 	c.Assert(err, check.IsNil)
 	waitDep()
 	expectedLabels := map[string]string{
-		"tsuru.io/is-tsuru":             "true",
-		"tsuru.io/is-build":             "false",
-		"tsuru.io/is-stopped":           "false",
-		"tsuru.io/is-service":           "true",
-		"tsuru.io/is-deploy":            "false",
-		"tsuru.io/is-isolated-run":      "false",
-		"tsuru.io/app-name":             a.GetName(),
-		"tsuru.io/app-process":          "p1",
-		"tsuru.io/app-version":          "1",
-		"tsuru.io/app-process-replicas": "1",
-		"tsuru.io/restarts":             "0",
-		"tsuru.io/app-platform":         a.GetPlatform(),
-		"tsuru.io/app-pool":             a.GetPool(),
-		"tsuru.io/provisioner":          provisionerName,
-		"tsuru.io/builder":              "",
+		"tsuru.io/is-tsuru":        "true",
+		"tsuru.io/is-build":        "false",
+		"tsuru.io/is-stopped":      "false",
+		"tsuru.io/is-service":      "true",
+		"tsuru.io/is-deploy":       "false",
+		"tsuru.io/is-isolated-run": "false",
+		"tsuru.io/app-name":        a.GetName(),
+		"tsuru.io/app-process":     "p1",
+		"tsuru.io/app-version":     "1",
+		"tsuru.io/restarts":        "0",
+		"tsuru.io/app-platform":    a.GetPlatform(),
+		"tsuru.io/app-pool":        a.GetPool(),
+		"tsuru.io/provisioner":     provisionerName,
+		"tsuru.io/builder":         "",
 	}
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -3088,7 +3452,7 @@ func (s *S) TestServiceManagerRemoveService(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = m.RemoveService(a, "p1", version)
+	err = m.RemoveService(context.TODO(), a, "p1", version.Version())
 	c.Assert(err, check.IsNil)
 	deps, err = s.client.Clientset.AppsV1().Deployments(ns).List(metav1.ListOptions{})
 	c.Assert(err, check.IsNil)
@@ -3109,7 +3473,7 @@ func (s *S) TestServiceManagerRemoveServiceMiddleFailure(c *check.C) {
 	defer waitDep()
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newCommittedVersion(c, a, map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -3117,7 +3481,7 @@ func (s *S) TestServiceManagerRemoveServiceMiddleFailure(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, nil)
@@ -3126,7 +3490,7 @@ func (s *S) TestServiceManagerRemoveServiceMiddleFailure(c *check.C) {
 	s.client.PrependReactor("delete", "deployments", func(action ktesting.Action) (handled bool, ret runtime.Object, err error) {
 		return true, nil, errors.New("my dep err")
 	})
-	err = m.RemoveService(a, "p1", version)
+	err = m.RemoveService(context.TODO(), a, "p1", version.Version())
 	c.Assert(err, check.ErrorMatches, "(?s).*my dep err.*")
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -3145,8 +3509,13 @@ func (s *S) TestEnsureNamespace(c *check.C) {
 		expected   apiv1.Namespace
 	}{
 		{
-			name:     "myns",
-			expected: apiv1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "myns"}},
+			name: "myns",
+			expected: apiv1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name: "myns",
+				Labels: map[string]string{
+					"name": "myns",
+				},
+			}},
 		},
 		{
 			name: "myns",
@@ -3156,8 +3525,9 @@ func (s *S) TestEnsureNamespace(c *check.C) {
 			expected: apiv1.Namespace{ObjectMeta: metav1.ObjectMeta{
 				Name: "myns",
 				Labels: map[string]string{
-					"lb1": "val1",
-					"lb2": "val2",
+					"lb1":  "val1",
+					"lb2":  "val2",
+					"name": "myns",
 				},
 			}},
 		},
@@ -3171,7 +3541,8 @@ func (s *S) TestEnsureNamespace(c *check.C) {
 			expected: apiv1.Namespace{ObjectMeta: metav1.ObjectMeta{
 				Name: "myns",
 				Labels: map[string]string{
-					"lb3": "val3",
+					"lb3":  "val3",
+					"name": "myns",
 				},
 			}},
 		},
@@ -3184,8 +3555,9 @@ func (s *S) TestEnsureNamespace(c *check.C) {
 			expected: apiv1.Namespace{ObjectMeta: metav1.ObjectMeta{
 				Name: "myns2",
 				Labels: map[string]string{
-					"lb1": "val1",
-					"lb2": "val2",
+					"lb1":  "val1",
+					"lb2":  "val2",
+					"name": "myns2",
 				},
 			}},
 		},
@@ -3210,7 +3582,7 @@ func (s *S) TestServiceManagerDeployServiceWithDisableHeadless(c *check.C) {
 	s.clusterClient.CustomData[disableHeadlessKey] = "true"
 	m := serviceManager{client: s.clusterClient}
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	a.Plan = appTypes.Plan{Memory: 1024}
 	version := newCommittedVersion(c, a, map[string]interface{}{
@@ -3219,7 +3591,7 @@ func (s *S) TestServiceManagerDeployServiceWithDisableHeadless(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = servicecommon.RunServicePipeline(&m, nil, provision.DeployArgs{
+	err = servicecommon.RunServicePipeline(context.TODO(), &m, 0, provision.DeployArgs{
 		App:     a,
 		Version: version,
 	}, servicecommon.ProcessSpec{
@@ -3253,10 +3625,6 @@ func (s *S) TestServiceManagerDeployServiceWithDisableHeadless(c *check.C) {
 				"tsuru.io/provisioner":  "kubernetes",
 				"tsuru.io/builder":      "",
 			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
-			},
 		},
 		Spec: apiv1.ServiceSpec{
 			Selector: map[string]string{
@@ -3279,6 +3647,159 @@ func (s *S) TestServiceManagerDeployServiceWithDisableHeadless(c *check.C) {
 	})
 }
 
+func (s *S) TestServiceManagerDeployServicePartialRollback(c *check.C) {
+	wgFunc := s.mock.DeploymentReactions(c)
+	defer wgFunc()
+	var rolloutFailureCalled bool
+	var wg sync.WaitGroup
+	f1 := func(action ktesting.Action) (bool, runtime.Object, error) {
+		wg.Add(1)
+		defer wg.Done()
+		dep := action.(ktesting.CreateAction).GetObject().(*appsv1.Deployment)
+		if dep == nil {
+			dep = action.(ktesting.UpdateAction).GetObject().(*appsv1.Deployment)
+		}
+		if dep.Name == "myapp-p2" && dep.Spec.Template.Labels["tsuru.io/app-version"] == "2" {
+			dep.Status.Conditions = append(dep.Status.Conditions, appsv1.DeploymentCondition{
+				Type:   appsv1.DeploymentProgressing,
+				Reason: deadlineExeceededProgressCond,
+			})
+			rolloutFailureCalled = true
+			return true, dep, nil
+		}
+		if rolloutFailureCalled && dep.Name == "myapp-p1" && dep.Spec.Template.Labels["tsuru.io/app-version"] == "1" {
+			dep.Status.Conditions = append(dep.Status.Conditions, appsv1.DeploymentCondition{
+				Type:   appsv1.DeploymentProgressing,
+				Reason: deadlineExeceededProgressCond,
+			})
+			return true, dep, nil
+		}
+		return false, nil, nil
+	}
+	s.client.PrependReactor("create", "deployments", f1)
+	s.client.PrependReactor("update", "deployments", f1)
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	a.Plan = appTypes.Plan{Memory: 1024}
+	manager := &serviceManager{client: s.clusterClient}
+	firstVersion := newVersion(c, a, map[string]interface{}{"processes": map[string]interface{}{"p1": "cm1", "p2": "cm2"}})
+	err = servicecommon.RunServicePipeline(context.TODO(), manager, 0, provision.DeployArgs{App: a, Version: firstVersion}, nil)
+	c.Assert(err, check.IsNil)
+	evt, err := event.New(&event.Opts{
+		Target:        event.Target{Type: event.TargetTypeApp, Value: a.GetName()},
+		Kind:          permission.PermAppDeploy,
+		Owner:         s.token,
+		Allowed:       event.Allowed(permission.PermAppDeploy),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents),
+		Cancelable:    true,
+	})
+	c.Assert(err, check.IsNil)
+	manager.writer = evt
+	args := provision.DeployArgs{
+		App:   a,
+		Event: evt,
+		Version: newVersion(c, a, map[string]interface{}{
+			"processes": map[string]interface{}{"p1": "CM1", "p2": "CM2"},
+		}),
+	}
+	err = servicecommon.RunServicePipeline(context.TODO(), manager, firstVersion.Version(), args, nil)
+	c.Assert(err, check.NotNil)
+	c.Assert(err.Error(), check.Matches, `(?s).*deployment \"myapp-p2\" exceeded its progress deadline.*`)
+	c.Assert(err.Error(), check.Matches, `(?s).*error rolling back updated service for myapp\[p1\] \[version 1\]: deployment "myapp-p1" exceeded its progress deadline.*`)
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+	dep, err := s.client.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Check(dep.Spec.Template.Labels["tsuru.io/app-version"], check.Equals, "2")
+	dep, err = s.client.AppsV1().Deployments(ns).Get("myapp-p2", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Check(dep.Spec.Template.Labels["tsuru.io/app-version"], check.Equals, "1")
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p2", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p2-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v2", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p2-v2", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+	c.Check(rolloutFailureCalled, check.Equals, true)
+	c.Check(evt.Done(err), check.IsNil)
+	c.Check(evt.Log(), check.Matches, `(?s).*\*\*\*\* UPDATING BACK AFTER FAILURE \*\*\*\*.*`)
+}
+
+func (s *S) TestServiceManagerDeployServiceRollbackErrorSingleProcess(c *check.C) {
+	wgFunc := s.mock.DeploymentReactions(c)
+	defer wgFunc()
+	var wg sync.WaitGroup
+	counter := 0
+	f1 := func(action ktesting.Action) (bool, runtime.Object, error) {
+		wg.Add(1)
+		defer wg.Done()
+		counter++
+		dep := action.(ktesting.CreateAction).GetObject().(*appsv1.Deployment)
+		switch counter {
+		case 2:
+			dep.Status.Conditions = append(dep.Status.Conditions, appsv1.DeploymentCondition{
+				Type:   appsv1.DeploymentProgressing,
+				Reason: deadlineExeceededProgressCond,
+			})
+			return false, dep, nil
+		case 3:
+			dep.Spec.Template.Labels["tsuru.io/app-version"] = "2"
+			return true, dep, errors.New("deploy error")
+		}
+		return false, nil, nil
+	}
+	s.client.PrependReactor("create", "deployments", f1)
+	s.client.PrependReactor("update", "deployments", f1)
+	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
+	err := app.CreateApp(context.TODO(), a, s.user)
+	c.Assert(err, check.IsNil)
+	a.Plan = appTypes.Plan{Memory: 1024}
+	manager := &serviceManager{client: s.clusterClient}
+	firstVersion := newVersion(c, a, map[string]interface{}{"processes": map[string]interface{}{"p1": "cm1"}})
+	err = servicecommon.RunServicePipeline(context.TODO(), manager, 0, provision.DeployArgs{App: a, Version: firstVersion}, nil)
+	c.Assert(err, check.IsNil)
+	evt, err := event.New(&event.Opts{
+		Target:        event.Target{Type: event.TargetTypeApp, Value: a.GetName()},
+		Kind:          permission.PermAppDeploy,
+		Owner:         s.token,
+		Allowed:       event.Allowed(permission.PermAppDeploy),
+		AllowedCancel: event.Allowed(permission.PermAppUpdateEvents),
+		Cancelable:    true,
+	})
+	c.Assert(err, check.IsNil)
+	manager.writer = evt
+	args := provision.DeployArgs{
+		App:   a,
+		Event: evt,
+		Version: newVersion(c, a, map[string]interface{}{
+			"processes": map[string]interface{}{"p1": "CM1"},
+		}),
+	}
+	err = servicecommon.RunServicePipeline(context.TODO(), manager, firstVersion.Version(), args, nil)
+	c.Assert(err, check.NotNil)
+	c.Assert(err.Error(), check.Matches, `(?s).*deployment \"myapp-p1\" exceeded its progress deadline.*`)
+	ns, err := s.client.AppNamespace(a)
+	c.Assert(err, check.IsNil)
+	dep, err := s.client.AppsV1().Deployments(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	c.Check(dep.Spec.Template.Labels["tsuru.io/app-version"], check.Equals, "2")
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v1", metav1.GetOptions{})
+	c.Check(err, check.IsNil)
+	_, err = s.client.CoreV1().Services(ns).Get("myapp-p1-v2", metav1.GetOptions{})
+	c.Check(k8sErrors.IsNotFound(err), check.Equals, true)
+	c.Check(evt.Done(err), check.IsNil)
+	c.Check(evt.Log(), check.Matches, `(?s).*\*\*\*\* UPDATING BACK AFTER FAILURE \*\*\*\*.*ERROR DURING ROLLBACK.*`)
+}
+
 func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes.AppVersion) (*appsv1.Deployment, *apiv1.Service) {
 	one := int32(1)
 	ten := int32(10)
@@ -3286,32 +3807,24 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 	maxUnavailable := intstr.FromInt(0)
 	expectedUID := int64(1000)
 	depLabels := map[string]string{
-		"tsuru.io/is-tsuru":             "true",
-		"tsuru.io/is-service":           "true",
-		"tsuru.io/is-build":             "false",
-		"tsuru.io/is-stopped":           "false",
-		"tsuru.io/is-deploy":            "false",
-		"tsuru.io/is-isolated-run":      "false",
-		"tsuru.io/app-name":             "myapp",
-		"tsuru.io/app-process":          "p1",
-		"tsuru.io/app-process-replicas": "1",
-		"tsuru.io/app-platform":         "",
-		"tsuru.io/app-pool":             "test-default",
-		"tsuru.io/provisioner":          "kubernetes",
-		"tsuru.io/builder":              "",
-		"app":                           "myapp-p1",
-		"version":                       "v1",
+		"tsuru.io/is-tsuru":        "true",
+		"tsuru.io/is-service":      "true",
+		"tsuru.io/is-build":        "false",
+		"tsuru.io/is-stopped":      "false",
+		"tsuru.io/is-deploy":       "false",
+		"tsuru.io/is-isolated-run": "false",
+		"tsuru.io/app-name":        "myapp",
+		"tsuru.io/app-process":     "p1",
+		"tsuru.io/app-platform":    "",
+		"tsuru.io/app-pool":        "test-default",
+		"tsuru.io/provisioner":     "kubernetes",
+		"tsuru.io/builder":         "",
+		"app":                      "myapp-p1",
+		"version":                  "v1",
 	}
 	podLabels := make(map[string]string)
 	for k, v := range depLabels {
-		if k == "tsuru.io/app-process-replicas" {
-			continue
-		}
 		podLabels[k] = v
-	}
-	annotations := map[string]string{
-		"tsuru.io/router-type": "fake",
-		"tsuru.io/router-name": "fake",
 	}
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -3320,7 +3833,7 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 			Name:        "myapp-p1",
 			Namespace:   ns,
 			Labels:      depLabels,
-			Annotations: annotations,
+			Annotations: map[string]string{},
 		},
 		Status: appsv1.DeploymentStatus{
 			UpdatedReplicas: 1,
@@ -3346,8 +3859,7 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 			},
 			Template: apiv1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      podLabels,
-					Annotations: annotations,
+					Labels: podLabels,
 				},
 				Spec: apiv1.PodSpec{
 					EnableServiceLinks: func(b bool) *bool { return &b }(false),
@@ -3358,8 +3870,9 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 					NodeSelector: map[string]string{
 						"tsuru.io/pool": "test-default",
 					},
-					RestartPolicy: "Always",
-					Subdomain:     "myapp-p1-units",
+					RestartPolicy:                 "Always",
+					Subdomain:                     "myapp-p1-units",
+					TerminationGracePeriodSeconds: func(v int64) *int64 { return &v }(40),
 					Containers: []apiv1.Container{
 						{
 							Name:  "myapp-p1",
@@ -3378,11 +3891,22 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 								{Name: "PORT_p1", Value: "8888"},
 							},
 							Resources: apiv1.ResourceRequirements{
-								Limits:   apiv1.ResourceList{},
-								Requests: apiv1.ResourceList{},
+								Limits: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: defaultEphemeralStorageLimit,
+								},
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceEphemeralStorage: *resource.NewQuantity(0, resource.DecimalSI),
+								},
 							},
 							Ports: []apiv1.ContainerPort{
 								{ContainerPort: 8888},
+							},
+							Lifecycle: &apiv1.Lifecycle{
+								PreStop: &apiv1.Handler{
+									Exec: &apiv1.ExecAction{
+										Command: []string{"sh", "-c", "sleep 10 || true"},
+									},
+								},
 							},
 						},
 					},
@@ -3408,10 +3932,6 @@ func (s *S) createLegacyDeployment(c *check.C, a provision.App, version appTypes
 				"tsuru.io/app-pool":        "test-default",
 				"tsuru.io/provisioner":     "kubernetes",
 				"tsuru.io/builder":         "",
-			},
-			Annotations: map[string]string{
-				"tsuru.io/router-type": "fake",
-				"tsuru.io/router-name": "fake",
 			},
 		},
 		Spec: apiv1.ServiceSpec{

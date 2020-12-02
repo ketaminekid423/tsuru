@@ -6,6 +6,7 @@ package container
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -36,8 +37,8 @@ import (
 func (s *S) TestContainerShortID(c *check.C) {
 	container := Container{Container: types.Container{ID: "abc123"}}
 	c.Check(container.ShortID(), check.Equals, container.ID)
-	container.ID = "abcdef123456"
-	c.Check(container.ShortID(), check.Equals, "abcdef1234")
+	container.ID = "abcdef12345678"
+	c.Check(container.ShortID(), check.Equals, "abcdef123456")
 }
 
 func (s *S) TestContainerAvailable(c *check.C) {
@@ -84,8 +85,8 @@ func (s *S) TestContainerCreate(c *check.C) {
 	app.CpuShare = 50
 	app.SetEnv(bind.EnvVar{Name: "A", Value: "myenva"})
 	app.SetEnv(bind.EnvVar{Name: "ABCD", Value: "other env"})
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -119,7 +120,7 @@ func (s *S) TestContainerCreate(c *check.C) {
 	c.Assert(container.Config.MemorySwap, check.Equals, app.Memory+app.Swap)
 	c.Assert(container.Config.CPUShares, check.Equals, int64(app.CpuShare))
 	sort.Strings(container.Config.Env)
-	expectedLabels, err := provision.ProcessLabels(provision.ProcessLabelsOpts{
+	expectedLabels, err := provision.ProcessLabels(context.TODO(), provision.ProcessLabelsOpts{
 		App:         app,
 		Process:     "myprocess1",
 		Provisioner: "docker",
@@ -217,8 +218,8 @@ func (s *S) TestContainerCreateAllocatesPort(c *check.C) {
 	app.Memory = 15
 	app.Swap = 15
 	app.CpuShare = 50
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -259,8 +260,8 @@ func (s *S) TestContainerCreateSecurityOptions(c *check.C) {
 	app.Memory = 15
 	app.Swap = 15
 	app.CpuShare = 50
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -297,8 +298,8 @@ func (s *S) TestContainerCreateForDeploy(c *check.C) {
 	app.Memory = 15
 	app.Swap = 15
 	app.CpuShare = 50
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -346,8 +347,8 @@ func (s *S) TestContainerCreateDoesNotSetEnvs(c *check.C) {
 	app := provisiontest.NewFakeApp("app-name", "brainfuck", 1)
 	app.SetEnv(bind.EnvVar{Name: "A", Value: "myenva"})
 	app.SetEnv(bind.EnvVar{Name: "ABCD", Value: "other env"})
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -391,8 +392,8 @@ func (s *S) TestContainerCreateUndefinedUser(c *check.C) {
 	img := "tsuru/python:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	app := provisiontest.NewFakeApp("app-name", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont := Container{Container: types.Container{
 		Name:    "myName",
 		AppName: app.GetName(),
@@ -463,8 +464,8 @@ func (s *S) TestContainerCreatePidLimit(c *check.C) {
 	config.Set("docker:pids-limit", 10)
 	defer config.Unset("docker:pids-limit")
 	app := provisiontest.NewFakeApp("app-name", "brainfuck", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	img := "tsuru/brainfuck:latest"
 	s.cli.PullImage(docker.PullImageOptions{Repository: img}, docker.AuthConfiguration{})
 	cont := Container{Container: types.Container{
@@ -1054,7 +1055,7 @@ func (s *S) TestRunPipelineWithRetry(c *check.C) {
 	}
 	pipe := action.NewPipeline(testAction)
 	expectedArgs := "test"
-	err := RunPipelineWithRetry(pipe, expectedArgs)
+	err := RunPipelineWithRetry(context.TODO(), pipe, expectedArgs)
 	c.Assert(err, check.IsNil)
 	c.Assert(calls, check.Equals, 1)
 	c.Assert(params, check.DeepEquals, []interface{}{
@@ -1071,7 +1072,7 @@ func (s *S) TestRunPipelineWithRetryUnknownError(c *check.C) {
 		},
 	}
 	pipe := action.NewPipeline(testAction)
-	err := RunPipelineWithRetry(pipe, nil)
+	err := RunPipelineWithRetry(context.TODO(), pipe, nil)
 	c.Assert(err, check.ErrorMatches, "my err")
 	c.Assert(calls, check.Equals, 1)
 }
@@ -1085,7 +1086,7 @@ func (s *S) TestRunPipelineWithRetryStartError(c *check.C) {
 		},
 	}
 	pipe := action.NewPipeline(testAction)
-	err := RunPipelineWithRetry(pipe, nil)
+	err := RunPipelineWithRetry(context.TODO(), pipe, nil)
 	c.Assert(err, check.ErrorMatches, `(?s)multiple errors reported \(5\):.*my err.*`)
 	c.Assert(calls, check.Equals, maxStartRetries+1)
 }
@@ -1102,7 +1103,7 @@ func (s *S) TestRunPipelineWithRetryStartErrorWithSuccess(c *check.C) {
 		},
 	}
 	pipe := action.NewPipeline(testAction)
-	err := RunPipelineWithRetry(pipe, nil)
+	err := RunPipelineWithRetry(context.TODO(), pipe, nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(calls, check.Equals, 3)
 }

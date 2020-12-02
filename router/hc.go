@@ -5,7 +5,8 @@
 package router
 
 import (
-	"github.com/tsuru/config"
+	"context"
+
 	"github.com/tsuru/tsuru/hc"
 )
 
@@ -14,24 +15,19 @@ import (
 // It will call the HealthCheck() method in the router (only if it's also a
 // HealthChecker), for each instance of it (including the "main" instance and
 // all custom routers).
-func BuildHealthCheck(routerName string) func() error {
-	return func() error {
-		routerConfig, err := config.Get("routers")
+func BuildHealthCheck(routerName string) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		configRouters, err := listConfigRouters()
 		if err != nil {
 			return hc.ErrDisabledComponent
 		}
-		routers, _ := routerConfig.(map[interface{}]interface{})
 		checkCount := 0
-		for ifaceName := range routers {
-			name := ifaceName.(string)
-			if name != routerName {
-				namedRouter := routers[name].(map[interface{}]interface{})
-				if tp, _ := namedRouter["type"].(string); tp != routerName {
-					continue
-				}
+		for _, r := range configRouters {
+			if r.Name != routerName && r.Type != routerName {
+				continue
 			}
 			checkCount++
-			err := healthCheck(name)
+			err := healthCheck(ctx, r.Name)
 			if err != nil {
 				return err
 			}
@@ -43,13 +39,13 @@ func BuildHealthCheck(routerName string) func() error {
 	}
 }
 
-func healthCheck(name string) error {
-	router, err := Get(name)
+func healthCheck(ctx context.Context, name string) error {
+	router, err := Get(ctx, name)
 	if err != nil {
 		return err
 	}
 	if hrouter, ok := router.(HealthChecker); ok {
-		return hrouter.HealthCheck()
+		return hrouter.HealthCheck(ctx)
 	}
 	return hc.ErrDisabledComponent
 }

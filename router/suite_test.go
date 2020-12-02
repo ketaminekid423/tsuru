@@ -10,6 +10,8 @@ import (
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/db"
 	"github.com/tsuru/tsuru/db/dbtest"
+	"github.com/tsuru/tsuru/servicemanager"
+	_ "github.com/tsuru/tsuru/storage/mongodb"
 	check "gopkg.in/check.v1"
 )
 
@@ -29,6 +31,8 @@ func (s *S) SetUpSuite(c *check.C) {
 	var err error
 	s.conn, err = db.Conn()
 	c.Assert(err, check.IsNil)
+	servicemanager.DynamicRouter, err = DynamicRouterService()
+	c.Assert(err, check.IsNil)
 
 }
 func (s *S) SetUpTest(c *check.C) {
@@ -44,6 +48,6 @@ func (s *S) TearDownTest(c *check.C) {
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }

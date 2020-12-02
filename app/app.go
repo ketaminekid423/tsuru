@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -61,6 +62,8 @@ var (
 	ErrNoAccess          = errors.New("team does not have access to this app")
 	ErrCannotOrphanApp   = errors.New("cannot revoke access from this team, as it's the unique team with access to the app")
 	ErrDisabledPlatform  = errors.New("Disabled Platform, only admin users can create applications with the platform")
+
+	ErrNoVersionProvisioner = errors.New("The current app provisioner does not support multiple versions handling")
 )
 
 var (
@@ -117,7 +120,9 @@ type App struct {
 	// it is lazy generated on the first call to FillInternalAddresses
 	InternalAddresses []provision.AppInternalAddress `json:",omitempty" bson:"-"`
 
-	Quota       quota.Quota
+	Quota quota.Quota
+
+	ctx         context.Context
 	builder     builder.Builder
 	provisioner provision.Provisioner
 }
@@ -126,6 +131,17 @@ var (
 	_ provision.App      = &App{}
 	_ rebuild.RebuildApp = &App{}
 )
+
+func (app *App) ReplaceContext(ctx context.Context) {
+	app.ctx = ctx
+}
+
+func (app *App) Context() context.Context {
+	if app.ctx != nil {
+		return app.ctx
+	}
+	return context.Background()
+}
 
 func (app *App) getBuilder() (builder.Builder, error) {
 	if app.builder != nil {
@@ -139,14 +155,14 @@ func (app *App) getBuilder() (builder.Builder, error) {
 	return app.builder, err
 }
 
-func (app *App) FillInternalAddresses(ctx context.Context) error {
+func (app *App) FillInternalAddresses() error {
 	provisioner, err := app.getProvisioner()
 	if err != nil {
 		return err
 	}
 
 	if interAppProvisioner, ok := provisioner.(provision.InterAppProvisioner); ok {
-		app.InternalAddresses, err = interAppProvisioner.InternalAddresses(ctx, app)
+		app.InternalAddresses, err = interAppProvisioner.InternalAddresses(app.ctx, app)
 		if err != nil {
 			return err
 		}
@@ -170,10 +186,7 @@ func (app *App) CleanImage(img string) error {
 func (app *App) getProvisioner() (provision.Provisioner, error) {
 	var err error
 	if app.provisioner == nil {
-		if app.Pool == "" {
-			return provision.GetDefault()
-		}
-		app.provisioner, err = pool.GetProvisionerForPool(app.Pool)
+		app.provisioner, err = pool.GetProvisionerForPool(app.ctx, app.Pool)
 	}
 	return app.provisioner, err
 }
@@ -184,7 +197,7 @@ func (app *App) Units() ([]provision.Unit, error) {
 	if err != nil {
 		return []provision.Unit{}, err
 	}
-	units, err := prov.Units(app)
+	units, err := prov.Units(context.TODO(), app)
 	if units == nil {
 		// This is unusual but was done because previously this method didn't
 		// return an error. This ensures we always return an empty list instead
@@ -196,7 +209,7 @@ func (app *App) Units() ([]provision.Unit, error) {
 
 // MarshalJSON marshals the app in json format.
 func (app *App) MarshalJSON() ([]byte, error) {
-	repo, _ := repository.Manager().GetRepository(app.Name)
+	repo, _ := repository.Manager().GetRepository(app.ctx, app.Name)
 	result := make(map[string]interface{})
 	result["name"] = app.Name
 	result["platform"] = app.Platform
@@ -216,6 +229,7 @@ func (app *App) MarshalJSON() ([]byte, error) {
 		"memory":   app.Plan.Memory,
 		"swap":     app.Plan.Swap,
 		"cpushare": app.Plan.CpuShare,
+		"override": app.Plan.Override,
 	}
 	routers, err := app.GetRoutersWithAddr()
 	if err != nil {
@@ -240,6 +254,13 @@ func (app *App) MarshalJSON() ([]byte, error) {
 	if len(app.InternalAddresses) > 0 {
 		result["internalAddresses"] = app.InternalAddresses
 	}
+	autoscale, err := app.AutoScaleInfo()
+	if err != nil {
+		errMsgs = append(errMsgs, fmt.Sprintf("unable to get autoscale info: %+v", err))
+	}
+	if autoscale != nil {
+		result["autoscale"] = autoscale
+	}
 	if len(errMsgs) > 0 {
 		result["error"] = strings.Join(errMsgs, "\n")
 	}
@@ -248,7 +269,7 @@ func (app *App) MarshalJSON() ([]byte, error) {
 
 // GetByName queries the database to find an app identified by the given
 // name.
-func GetByName(name string) (*App, error) {
+func GetByName(ctx context.Context, name string) (*App, error) {
 	var app App
 	conn, err := db.Conn()
 	if err != nil {
@@ -259,6 +280,7 @@ func GetByName(name string) (*App, error) {
 	if err == mgo.ErrNotFound {
 		return nil, appTypes.ErrAppNotFound
 	}
+	app.ctx = ctx
 	return &app, err
 }
 
@@ -269,8 +291,11 @@ func GetByName(name string) (*App, error) {
 //       1. Save the app in the database
 //       2. Create the git repository using the repository manager
 //       3. Provision the app using the provisioner
-func CreateApp(app *App, user *auth.User) error {
-	if _, err := GetByName(app.GetName()); err != appTypes.ErrAppNotFound {
+func CreateApp(ctx context.Context, app *App, user *auth.User) error {
+	if app.ctx == nil {
+		app.ctx = ctx
+	}
+	if _, err := GetByName(ctx, app.GetName()); err != appTypes.ErrAppNotFound {
 		if err != nil {
 			return errors.WithMessage(err, "unable to check if app already exists")
 		}
@@ -279,9 +304,9 @@ func CreateApp(app *App, user *auth.User) error {
 	var plan *appTypes.Plan
 	var err error
 	if app.Plan.Name == "" {
-		plan, err = servicemanager.Plan.DefaultPlan()
+		plan, err = servicemanager.Plan.DefaultPlan(ctx)
 	} else {
-		plan, err = servicemanager.Plan.FindByName(app.Plan.Name)
+		plan, err = servicemanager.Plan.FindByName(ctx, app.Plan.Name)
 	}
 	if err != nil {
 		return err
@@ -299,12 +324,12 @@ func CreateApp(app *App, user *auth.User) error {
 	app.Owner = user.Email
 	app.Tags = processTags(app.Tags)
 	if app.Platform != "" {
-		app.Platform, app.PlatformVersion, err = getPlatformNameAndVersion(app.Platform)
+		app.Platform, app.PlatformVersion, err = getPlatformNameAndVersion(ctx, app.Platform)
 		if err != nil {
 			return err
 		}
 	}
-	err = app.validateNew()
+	err = app.validateNew(ctx)
 	if err != nil {
 		return err
 	}
@@ -318,7 +343,7 @@ func CreateApp(app *App, user *auth.User) error {
 		&addRouterBackend,
 	}
 	pipeline := action.NewPipeline(actions...)
-	err = pipeline.Execute(app, user)
+	err = pipeline.Execute(ctx, app, user)
 	if err != nil {
 		return &appTypes.AppCreationError{App: app.Name, Err: err}
 	}
@@ -332,13 +357,13 @@ func (app *App) configureCreateRouters() error {
 	var err error
 	if app.Router == "" {
 		var appPool *pool.Pool
-		appPool, err = pool.GetPoolByName(app.GetPool())
+		appPool, err = pool.GetPoolByName(app.ctx, app.GetPool())
 		if err != nil {
 			return err
 		}
 		app.Router, err = appPool.GetDefaultRouter()
 	} else {
-		_, err = router.Get(app.Router)
+		_, err = router.Get(app.ctx, app.Router)
 	}
 	if err != nil {
 		return err
@@ -361,7 +386,6 @@ type UpdateAppArgs struct {
 // Update changes informations of the application.
 func (app *App) Update(args UpdateAppArgs) (err error) {
 	description := args.UpdateData.Description
-	planName := args.UpdateData.Plan.Name
 	poolName := args.UpdateData.Pool
 	teamOwner := args.UpdateData.TeamOwner
 	platform := args.UpdateData.Platform
@@ -387,15 +411,16 @@ func (app *App) Update(args UpdateAppArgs) (err error) {
 	if err != nil {
 		return err
 	}
-	if planName != "" {
-		plan, errFind := servicemanager.Plan.FindByName(planName)
+	if args.UpdateData.Plan.Name != "" {
+		plan, errFind := servicemanager.Plan.FindByName(app.ctx, args.UpdateData.Plan.Name)
 		if errFind != nil {
 			return errFind
 		}
 		app.Plan = *plan
 	}
+	app.Plan.MergeOverride(args.UpdateData.Plan.Override)
 	if teamOwner != "" {
-		team, errTeam := servicemanager.Team.FindByName(teamOwner)
+		team, errTeam := servicemanager.Team.FindByName(app.ctx, teamOwner)
 		if errTeam != nil {
 			return errTeam
 		}
@@ -411,7 +436,7 @@ func (app *App) Update(args UpdateAppArgs) (err error) {
 	}
 	if platform != "" {
 		var p, v string
-		p, v, err = getPlatformNameAndVersion(platform)
+		p, v, err = getPlatformNameAndVersion(app.ctx, platform)
 		if err != nil {
 			return err
 		}
@@ -446,12 +471,12 @@ func (app *App) Update(args UpdateAppArgs) (err error) {
 			&provisionAppNewProvisioner,
 			&provisionAppAddUnits,
 			&destroyAppOldProvisioner)
-	} else if app.Plan != oldApp.Plan && args.ShouldRestart {
+	} else if !reflect.DeepEqual(app.Plan, oldApp.Plan) && args.ShouldRestart {
 		actions = append(actions, &restartApp)
 	} else if app.Pool != oldApp.Pool {
 		actions = append(actions, &restartApp)
 	}
-	return action.NewPipeline(actions...).Execute(app, &oldApp, args.Writer)
+	return action.NewPipeline(actions...).Execute(app.ctx, app, &oldApp, args.Writer)
 }
 
 func validateVolumes(app *App) error {
@@ -465,15 +490,15 @@ func validateVolumes(app *App) error {
 	return nil
 }
 
-func getPlatformNameAndVersion(platform string) (string, string, error) {
+func getPlatformNameAndVersion(ctx context.Context, platform string) (string, string, error) {
 	repo, version := image.SplitImageName(platform)
-	p, err := servicemanager.Platform.FindByName(repo)
+	p, err := servicemanager.Platform.FindByName(ctx, repo)
 	if err != nil {
 		return "", "", err
 	}
 
 	if version != "latest" {
-		_, err := servicemanager.PlatformImage.FindImage(p.Name, version)
+		_, err := servicemanager.PlatformImage.FindImage(ctx, p.Name, version)
 		if err != nil {
 			return p.Name, "", err
 		}
@@ -553,7 +578,7 @@ func (app *App) unbindVolumes() error {
 }
 
 // Delete deletes an app.
-func Delete(app *App, evt *event.Event, requestID string) error {
+func Delete(ctx context.Context, app *App, evt *event.Event, requestID string) error {
 	w := evt
 	isSwapped, swappedWith, err := router.IsSwapped(app.GetName())
 	if err != nil {
@@ -582,17 +607,13 @@ func Delete(app *App, evt *event.Event, requestID string) error {
 	if err != nil {
 		return err
 	}
-	err = prov.Destroy(app)
-	if err != nil {
-		logErr("Unable to destroy app in provisioner", err)
-	}
-	err = registry.RemoveAppImages(appName)
+	err = registry.RemoveAppImages(ctx, appName)
 	if err != nil {
 		log.Errorf("failed to remove images from registry for app %s: %s", appName, err)
 	}
 	if cleanProv, ok := prov.(provision.CleanImageProvisioner); ok {
 		var versions appTypes.AppVersions
-		versions, err = servicemanager.AppVersion.AppVersions(app)
+		versions, err = servicemanager.AppVersion.AppVersions(ctx, app)
 		if err != nil {
 			log.Errorf("failed to list versions for app %s: %s", appName, err)
 		}
@@ -612,7 +633,7 @@ func Delete(app *App, evt *event.Event, requestID string) error {
 			}
 		}
 	}
-	err = servicemanager.AppVersion.DeleteVersions(appName)
+	err = servicemanager.AppVersion.DeleteVersions(ctx, appName)
 	if err != nil {
 		log.Errorf("failed to remove image names from storage for app %s: %s", appName, err)
 	}
@@ -623,9 +644,9 @@ func Delete(app *App, evt *event.Event, requestID string) error {
 	routers := app.GetRouters()
 	for _, appRouter := range routers {
 		var r router.Router
-		r, err = router.Get(appRouter.Name)
+		r, err = router.Get(ctx, appRouter.Name)
 		if err == nil {
-			err = r.RemoveBackend(app.Name)
+			err = r.RemoveBackend(ctx, app.Name)
 		}
 		if err != nil {
 			logErr("Failed to remove router backend", err)
@@ -639,30 +660,30 @@ func Delete(app *App, evt *event.Event, requestID string) error {
 	if err != nil {
 		logErr("Unable to unbind volumes", err)
 	}
-	err = repository.Manager().RemoveRepository(appName)
+	err = repository.Manager().RemoveRepository(ctx, appName)
 	if err != nil {
 		logErr("Unable to remove app from repository manager", err)
 	}
 	token := app.Env["TSURU_APP_TOKEN"].Value
-	err = AuthScheme.AppLogout(token)
+	err = AuthScheme.AppLogout(ctx, token)
 	if err != nil {
 		logErr("Unable to remove app token in destroy", err)
 	}
 	owner, err := auth.GetUserByEmail(app.Owner)
 	if err == nil {
-		err = servicemanager.UserQuota.Inc(owner.Email, -1)
+		err = servicemanager.UserQuota.Inc(ctx, owner, -1)
 	}
 	if err != nil {
 		logErr("Unable to release app quota", err)
 	}
-	logConn, err := db.LogConn()
-	if err == nil {
-		defer logConn.Close()
-		err = logConn.AppLogCollection(appName).DropCollection()
+
+	if plog, ok := servicemanager.AppLog.(appTypes.AppLogServiceProvision); ok {
+		err = plog.CleanUp(app.Name)
+		if err != nil {
+			logErr("Unable to remove logs", err)
+		}
 	}
-	if err != nil {
-		logErr("Unable to remove logs collection", err)
-	}
+
 	conn, err := db.Conn()
 	if err == nil {
 		defer conn.Close()
@@ -670,6 +691,15 @@ func Delete(app *App, evt *event.Event, requestID string) error {
 	}
 	if err != nil {
 		logErr("Unable to remove app from db", err)
+	}
+	// NOTE: some provisioners hold apps' info on their own (e.g. apps.tsuru.io
+	// CustomResource on Kubernetes). Deleting the app on provisioner as the last
+	// step of removal, we may give time enough to external components
+	// (e.g. tsuru/kubernetes-router) that depend on the provisioner's app info
+	// finish as expected.
+	err = prov.Destroy(ctx, app)
+	if err != nil {
+		logErr("Unable to destroy app in provisioner", err)
 	}
 	err = event.MarkAsRemoved(event.Target{Type: event.TargetTypeApp, Value: appName})
 	if err != nil {
@@ -733,7 +763,7 @@ func (app *App) AddUnits(n uint, process, versionStr string, w io.Writer) error 
 			return errors.New("Cannot add units to an app that has stopped or sleeping units")
 		}
 	}
-	version, err := app.getVersion(versionStr)
+	version, err := app.getVersion(app.ctx, versionStr)
 	if err != nil {
 		return err
 	}
@@ -741,13 +771,12 @@ func (app *App) AddUnits(n uint, process, versionStr string, w io.Writer) error 
 	err = action.NewPipeline(
 		&reserveUnitsToAdd,
 		&provisionAddUnits,
-	).Execute(app, n, w, process, version)
+	).Execute(app.ctx, app, n, w, process, version)
 	rebuild.RoutesRebuildOrEnqueueWithProgress(app.Name, w)
-	quotaErr := app.fixQuota()
 	if err != nil {
 		return newErrorWithLog(err, app, "add units")
 	}
-	return quotaErr
+	return nil
 }
 
 // RemoveUnits removes n units from the app. It's a process composed of
@@ -755,39 +784,22 @@ func (app *App) AddUnits(n uint, process, versionStr string, w io.Writer) error 
 //
 //     1. Remove units from the provisioner
 //     2. Update quota
-func (app *App) RemoveUnits(n uint, process, versionStr string, w io.Writer) error {
+func (app *App) RemoveUnits(ctx context.Context, n uint, process, versionStr string, w io.Writer) error {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return err
 	}
 	w = app.withLogWriter(w)
-	version, err := app.getVersion(versionStr)
+	version, err := app.getVersion(ctx, versionStr)
 	if err != nil {
 		return err
 	}
-	err = prov.RemoveUnits(app, n, process, version, w)
+	err = prov.RemoveUnits(ctx, app, n, process, version, w)
 	rebuild.RoutesRebuildOrEnqueueWithProgress(app.Name, w)
-	quotaErr := app.fixQuota()
 	if err != nil {
 		return newErrorWithLog(err, app, "remove units")
 	}
-	return quotaErr
-}
-
-func (app *App) fixQuota() error {
-	units, err := app.Units()
-	if err != nil {
-		return err
-	}
-	var count int
-	for _, u := range units {
-		if u.Status == provision.StatusBuilding ||
-			u.Status == provision.StatusCreated {
-			continue
-		}
-		count++
-	}
-	return app.SetQuotaInUse(count)
+	return nil
 }
 
 // SetUnitStatus changes the status of the given unit.
@@ -817,7 +829,7 @@ type UpdateUnitsResult struct {
 	Found bool
 }
 
-func findNodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, error) {
+func findNodeForNodeData(ctx context.Context, nodeData provision.NodeStatusData) (provision.Node, error) {
 	provisioners, err := provision.Registry()
 	if err != nil {
 		return nil, err
@@ -827,9 +839,9 @@ func findNodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, err
 		if nodeProv, ok := p.(provision.NodeProvisioner); ok {
 			var node provision.Node
 			if len(nodeData.Addrs) == 1 {
-				node, err = nodeProv.GetNode(nodeData.Addrs[0])
+				node, err = nodeProv.GetNode(ctx, nodeData.Addrs[0])
 			} else {
-				node, err = nodeProv.NodeForNodeData(nodeData)
+				node, err = nodeProv.NodeForNodeData(ctx, nodeData)
 			}
 			if err == nil {
 				return node, nil
@@ -847,8 +859,8 @@ func findNodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, err
 
 // UpdateNodeStatus updates the status of the given node and its units,
 // returning a map which units were found during the update.
-func UpdateNodeStatus(nodeData provision.NodeStatusData) ([]UpdateUnitsResult, error) {
-	node, findNodeErr := findNodeForNodeData(nodeData)
+func UpdateNodeStatus(ctx context.Context, nodeData provision.NodeStatusData) ([]UpdateUnitsResult, error) {
+	node, findNodeErr := findNodeForNodeData(ctx, nodeData)
 	var nodeAddresses []string
 	if findNodeErr == nil {
 		nodeAddresses = []string{node.Address()}
@@ -938,7 +950,7 @@ func (app *App) Grant(team *authTypes.Team) error {
 		return err
 	}
 	for _, user := range users {
-		err = repository.Manager().GrantAccess(app.Name, user.Email)
+		err = repository.Manager().GrantAccess(app.ctx, app.Name, user.Email)
 		if err != nil {
 			conn.Apps().Update(bson.M{"name": app.Name}, bson.M{"$pull": bson.M{"teams": team.Name}})
 			return err
@@ -992,7 +1004,7 @@ func (app *App) Revoke(team *authTypes.Team) error {
 		if canDeploy {
 			continue
 		}
-		err = repository.Manager().RevokeAccess(app.Name, user.Email)
+		err = repository.Manager().RevokeAccess(app.ctx, app.Name, user.Email)
 		if err != nil {
 			conn.Apps().Update(bson.M{"name": app.Name}, bson.M{"$addToSet": bson.M{"teams": team.Name}})
 			return err
@@ -1003,7 +1015,7 @@ func (app *App) Revoke(team *authTypes.Team) error {
 
 // GetTeams returns a slice of teams that have access to the app.
 func (app *App) GetTeams() []authTypes.Team {
-	t, _ := servicemanager.Team.FindByNames(app.Teams)
+	t, _ := servicemanager.Team.FindByNames(app.ctx, app.Teams)
 	return t
 }
 
@@ -1014,14 +1026,14 @@ func (app *App) SetPool() error {
 	}
 	if poolName == "" {
 		var p *pool.Pool
-		p, err = pool.GetDefaultPool()
+		p, err = pool.GetDefaultPool(app.ctx)
 		if err != nil {
 			return err
 		}
 		poolName = p.Name
 	}
 	app.Pool = poolName
-	p, err := pool.GetPoolByName(poolName)
+	p, err := pool.GetPoolByName(app.ctx, poolName)
 	if err != nil {
 		return err
 	}
@@ -1030,12 +1042,12 @@ func (app *App) SetPool() error {
 
 func (app *App) getPoolForApp(poolName string) (string, error) {
 	if poolName == "" {
-		pools, err := pool.ListPoolsForTeam(app.TeamOwner)
+		pools, err := pool.ListPoolsForTeam(app.ctx, app.TeamOwner)
 		if err != nil {
 			return "", err
 		}
 		if len(pools) > 1 {
-			publicPools, err := pool.ListPublicPools()
+			publicPools, err := pool.ListPublicPools(app.ctx)
 			if err != nil {
 				return "", err
 			}
@@ -1050,7 +1062,7 @@ func (app *App) getPoolForApp(poolName string) (string, error) {
 		}
 		return pools[0].Name, nil
 	}
-	pool, err := pool.GetPoolByName(poolName)
+	pool, err := pool.GetPoolByName(app.ctx, poolName)
 	if err != nil {
 		return "", err
 	}
@@ -1078,7 +1090,7 @@ func (app *App) getEnv(name string) (bind.EnvVar, error) {
 }
 
 // validateNew checks app name format, pool and plan
-func (app *App) validateNew() error {
+func (app *App) validateNew(ctx context.Context) error {
 	if app.Name == InternalAppName || !validation.ValidateName(app.Name) {
 		msg := "Invalid app name, your app should have at most 40 " +
 			"characters, containing only lower case letters, numbers or dashes, " +
@@ -1098,7 +1110,7 @@ func (app *App) validate() error {
 }
 
 func (app *App) validatePlan() error {
-	pool, err := pool.GetPoolByName(app.Pool)
+	pool, err := pool.GetPoolByName(app.ctx, app.Pool)
 	if err != nil {
 		return err
 	}
@@ -1115,7 +1127,7 @@ func (app *App) validatePlan() error {
 }
 
 func (app *App) validatePool() error {
-	pool, err := pool.GetPoolByName(app.Pool)
+	pool, err := pool.GetPoolByName(app.ctx, app.Pool)
 	if err != nil {
 		return err
 	}
@@ -1142,7 +1154,7 @@ func (app *App) validatePool() error {
 }
 
 func (app *App) validateTeamOwner(p *pool.Pool) error {
-	_, err := servicemanager.Team.FindByName(app.TeamOwner)
+	_, err := servicemanager.Team.FindByName(app.ctx, app.TeamOwner)
 	if err != nil {
 		return &tsuruErrors.ValidationError{Message: err.Error()}
 	}
@@ -1161,7 +1173,7 @@ func (app *App) validateTeamOwner(p *pool.Pool) error {
 }
 
 func (app *App) ValidateService(services ...string) error {
-	pool, err := pool.GetPoolByName(app.Pool)
+	pool, err := pool.GetPoolByName(app.ctx, app.Pool)
 	if err != nil {
 		return err
 	}
@@ -1242,11 +1254,11 @@ func (app *App) run(cmd string, w io.Writer, args provision.RunArgs) error {
 			opts.Units = append(opts.Units, u.ID)
 		}
 	}
-	return execProv.ExecuteCommand(opts)
+	return execProv.ExecuteCommand(app.ctx, opts)
 }
 
 // Restart runs the restart hook for the app, writing its output to w.
-func (app *App) Restart(process, versionStr string, w io.Writer) error {
+func (app *App) Restart(ctx context.Context, process, versionStr string, w io.Writer) error {
 	w = app.withLogWriter(w)
 	msg := fmt.Sprintf("---- Restarting process %q ----", process)
 	if process == "" {
@@ -1261,7 +1273,7 @@ func (app *App) Restart(process, versionStr string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	err = prov.Restart(app, process, version, w)
+	err = prov.Restart(ctx, app, process, version, w)
 	if err != nil {
 		log.Errorf("[restart] error on restart the app %s - %s", app.Name, err)
 		return newErrorWithLog(err, app, "restart")
@@ -1270,7 +1282,7 @@ func (app *App) Restart(process, versionStr string, w io.Writer) error {
 	return nil
 }
 
-func (app *App) Stop(w io.Writer, process, versionStr string) error {
+func (app *App) Stop(ctx context.Context, w io.Writer, process, versionStr string) error {
 	w = app.withLogWriter(w)
 	msg := fmt.Sprintf("\n ---> Stopping the process %q", process)
 	if process == "" {
@@ -1285,7 +1297,7 @@ func (app *App) Stop(w io.Writer, process, versionStr string) error {
 	if err != nil {
 		return err
 	}
-	err = prov.Stop(app, process, version)
+	err = prov.Stop(ctx, app, process, version)
 	if err != nil {
 		log.Errorf("[stop] error on stop the app %s - %s", app.Name, err)
 		return err
@@ -1293,7 +1305,7 @@ func (app *App) Stop(w io.Writer, process, versionStr string) error {
 	return nil
 }
 
-func (app *App) Sleep(w io.Writer, process, versionStr string, proxyURL *url.URL) error {
+func (app *App) Sleep(ctx context.Context, w io.Writer, process, versionStr string, proxyURL *url.URL) error {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return err
@@ -1311,23 +1323,23 @@ func (app *App) Sleep(w io.Writer, process, versionStr string, proxyURL *url.URL
 	routers := app.GetRouters()
 	for _, appRouter := range routers {
 		var r router.Router
-		r, err = router.Get(appRouter.Name)
+		r, err = router.Get(ctx, appRouter.Name)
 		if err != nil {
 			log.Errorf("[sleep] error on sleep the app %s - %s", app.Name, err)
 			return err
 		}
 		var oldRoutes []*url.URL
-		oldRoutes, err = r.Routes(app.GetName())
+		oldRoutes, err = r.Routes(app.ctx, app.GetName())
 		if err != nil {
 			log.Errorf("[sleep] error on sleep the app %s - %s", app.Name, err)
 			return err
 		}
-		err = r.RemoveRoutes(app.GetName(), oldRoutes)
+		err = r.RemoveRoutes(app.ctx, app.GetName(), oldRoutes)
 		if err != nil {
 			log.Errorf("[sleep] error on sleep the app %s - %s", app.Name, err)
 			return err
 		}
-		err = r.AddRoutes(app.GetName(), []*url.URL{proxyURL})
+		err = r.AddRoutes(app.ctx, app.GetName(), []*url.URL{proxyURL})
 		if err != nil {
 			log.Errorf("[sleep] error on sleep the app %s - %s", app.Name, err)
 			return err
@@ -1337,7 +1349,7 @@ func (app *App) Sleep(w io.Writer, process, versionStr string, proxyURL *url.URL
 	if err != nil {
 		return err
 	}
-	err = sleepProv.Sleep(app, process, version)
+	err = sleepProv.Sleep(ctx, app, process, version)
 	if err != nil {
 		log.Errorf("[sleep] error on sleep the app %s - %s", app.Name, err)
 		log.Errorf("[sleep] rolling back the sleep %s", app.Name)
@@ -1405,7 +1417,17 @@ func (app *App) GetTeamsName() []string {
 
 // GetMemory returns the memory limit (in bytes) for the app.
 func (app *App) GetMemory() int64 {
+	if app.Plan.Override.Memory != nil {
+		return *app.Plan.Override.Memory
+	}
 	return app.Plan.Memory
+}
+
+func (app *App) GetMilliCPU() int {
+	if app.Plan.Override.CPUMilli != nil {
+		return *app.Plan.Override.CPUMilli
+	}
+	return app.Plan.CPUMilli
 }
 
 // GetSwap returns the swap limit (in bytes) for the app.
@@ -1430,16 +1452,47 @@ func (app *App) GetAddresses() ([]string, error) {
 	return addresses, nil
 }
 
-func (app *App) GetQuota() quota.Quota {
-	return app.Quota
+func (app *App) GetInternalAddresses(ctx context.Context) ([]string, error) {
+	prov, err := app.getProvisioner()
+	if err != nil {
+		return nil, err
+	}
+	interAppProv, ok := prov.(provision.InterAppProvisioner)
+	if !ok {
+		return nil, nil
+	}
+	addrs, err := interAppProv.InternalAddresses(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	var addresses []string
+	for _, addr := range addrs {
+		addresses = append(addresses, fmt.Sprintf("%s://%s:%d", strings.ToLower(addr.Protocol), addr.Domain, addr.Port))
+	}
+	return addresses, nil
 }
 
-func (app *App) SetQuotaInUse(inUse int) error {
-	return servicemanager.AppQuota.Set(app.Name, inUse)
+func (app *App) GetQuotaInUse() (int, error) {
+	units, err := app.Units()
+	if err != nil {
+		return 0, err
+	}
+	counter := 0
+	for _, u := range units {
+		switch u.Status {
+		case provision.StatusStarting, provision.StatusStarted, provision.StatusStopped, provision.StatusAsleep:
+			counter++
+		}
+	}
+	return counter, nil
+}
+
+func (app *App) GetQuota() (*quota.Quota, error) {
+	return servicemanager.AppQuota.Get(app.ctx, app)
 }
 
 func (app *App) SetQuotaLimit(limit int) error {
-	return servicemanager.AppQuota.SetLimit(app.Name, limit)
+	return servicemanager.AppQuota.SetLimit(app.ctx, app, limit)
 }
 
 // GetCname returns the cnames of the app.
@@ -1573,11 +1626,11 @@ func (app *App) restartIfUnits(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app)
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app.ctx, app)
 	if err != nil {
 		return err
 	}
-	err = prov.Restart(app, "", version, w)
+	err = prov.Restart(app.ctx, app, "", version, w)
 	if err != nil {
 		return newErrorWithLog(err, app, "restart")
 	}
@@ -1595,7 +1648,7 @@ func (app *App) AddCName(cnames ...string) error {
 		&saveCNames,
 		&updateApp,
 	}
-	err := action.NewPipeline(actions...).Execute(app, cnames)
+	err := action.NewPipeline(actions...).Execute(app.ctx, app, cnames)
 	rebuild.RoutesRebuildOrEnqueue(app.Name)
 	return err
 }
@@ -1607,7 +1660,7 @@ func (app *App) RemoveCName(cnames ...string) error {
 		&removeCNameFromDatabase,
 		&removeCNameFromApp,
 	}
-	err := action.NewPipeline(actions...).Execute(app, cnames)
+	err := action.NewPipeline(actions...).Execute(app.ctx, app, cnames)
 	rebuild.RoutesRebuildOrEnqueue(app.Name)
 	return err
 }
@@ -1698,7 +1751,7 @@ func (app *App) RemoveInstance(removeArgs bind.RemoveInstanceArgs) error {
 
 // LastLogs returns a list of the last `lines` log of the app, matching the
 // fields in the log instance received as an example.
-func (app *App) LastLogs(logService appTypes.AppLogService, args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
+func (app *App) LastLogs(ctx context.Context, logService appTypes.AppLogService, args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return nil, err
@@ -1716,7 +1769,7 @@ func (app *App) LastLogs(logService appTypes.AppLogService, args appTypes.ListLo
 		}
 	}
 	args.AppName = app.Name
-	return logService.List(args)
+	return logService.List(ctx, args)
 }
 
 type Filter struct {
@@ -1804,7 +1857,7 @@ type AppUnitsResponse struct {
 	Err   error
 }
 
-func Units(apps []App) (map[string]AppUnitsResponse, error) {
+func Units(ctx context.Context, apps []App) (map[string]AppUnitsResponse, error) {
 	poolProvMap := map[string]provision.Provisioner{}
 	provMap := map[provision.Provisioner][]provision.App{}
 	for i, a := range apps {
@@ -1832,7 +1885,7 @@ func Units(apps []App) (map[string]AppUnitsResponse, error) {
 		provApps := provApps
 		go func() {
 			defer wg.Done()
-			units, err := prov.Units(provApps...)
+			units, err := prov.Units(ctx, provApps...)
 			rspCh <- parallelRsp{
 				units:    units,
 				err:      err,
@@ -1862,7 +1915,7 @@ func Units(apps []App) (map[string]AppUnitsResponse, error) {
 }
 
 // List returns the list of apps filtered through the filter parameter.
-func List(filter *Filter) ([]App, error) {
+func List(ctx context.Context, filter *Filter) ([]App, error) {
 	apps := []App{}
 	query := filter.Query()
 	conn, err := db.Conn()
@@ -1873,6 +1926,9 @@ func List(filter *Filter) ([]App, error) {
 	conn.Close()
 	if err != nil {
 		return nil, err
+	}
+	for i := range apps {
+		apps[i].ctx = ctx
 	}
 	if filter != nil && len(filter.Statuses) > 0 {
 		appsProvisionerMap := make(map[string][]provision.App)
@@ -1892,7 +1948,7 @@ func List(filter *Filter) ([]App, error) {
 				return nil, err
 			}
 			if filterProv, ok := prov.(provision.AppFilterProvisioner); ok {
-				apps, err = filterProv.FilterAppsByUnitStatus(apps, filter.Statuses)
+				apps, err = filterProv.FilterAppsByUnitStatus(ctx, apps, filter.Statuses)
 				if err != nil {
 					return nil, err
 				}
@@ -1904,7 +1960,7 @@ func List(filter *Filter) ([]App, error) {
 		}
 		apps = apps[:len(provisionApps)]
 	}
-	err = loadCachedAddrsInApps(apps)
+	err = loadCachedAddrsInApps(ctx, apps)
 	if err != nil {
 		return nil, err
 	}
@@ -1915,7 +1971,7 @@ func appRouterAddrKey(appName, routerName string) string {
 	return strings.Join([]string{"app-router-addr", appName, routerName}, "\x00")
 }
 
-func loadCachedAddrsInApps(apps []App) error {
+func loadCachedAddrsInApps(ctx context.Context, apps []App) error {
 	keys := make([]string, 0, len(apps))
 	for i := range apps {
 		a := &apps[i]
@@ -1924,7 +1980,7 @@ func loadCachedAddrsInApps(apps []App) error {
 			keys = append(keys, appRouterAddrKey(a.Name, a.Routers[j].Name))
 		}
 	}
-	entries, err := servicemanager.AppCache.List(keys...)
+	entries, err := servicemanager.AppCache.List(ctx, keys...)
 	if err != nil {
 		return err
 	}
@@ -1949,7 +2005,7 @@ func loadCachedAddrsInApps(apps []App) error {
 	return nil
 }
 
-func (app *App) hasMultipleVersions() (bool, error) {
+func (app *App) hasMultipleVersions(ctx context.Context) (bool, error) {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return false, err
@@ -1958,7 +2014,7 @@ func (app *App) hasMultipleVersions() (bool, error) {
 	if !isVersionProv {
 		return false, nil
 	}
-	versions, err := versionProv.DeployedVersions(app)
+	versions, err := versionProv.DeployedVersions(ctx, app)
 	if err != nil {
 		return false, err
 	}
@@ -1966,12 +2022,12 @@ func (app *App) hasMultipleVersions() (bool, error) {
 }
 
 // Swap calls the Router.Swap and updates the app.CName in the database.
-func Swap(app1, app2 *App, cnameOnly bool) error {
-	app1Multiple, err := app1.hasMultipleVersions()
+func Swap(ctx context.Context, app1, app2 *App, cnameOnly bool) error {
+	app1Multiple, err := app1.hasMultipleVersions(ctx)
 	if err != nil {
 		return err
 	}
-	app2Multiple, err := app2.hasMultipleVersions()
+	app2Multiple, err := app2.hasMultipleVersions(ctx)
 	if err != nil {
 		return err
 	}
@@ -1983,11 +2039,11 @@ func Swap(app1, app2 *App, cnameOnly bool) error {
 	if len(a1Routers) != 1 || len(a2Routers) != 1 {
 		return errors.New("swapping apps with multiple routers is not supported")
 	}
-	r1, err := router.Get(a1Routers[0].Name)
+	r1, err := router.Get(ctx, a1Routers[0].Name)
 	if err != nil {
 		return err
 	}
-	r2, err := router.Get(a2Routers[0].Name)
+	r2, err := router.Get(ctx, a2Routers[0].Name)
 	if err != nil {
 		return err
 	}
@@ -1997,7 +2053,7 @@ func Swap(app1, app2 *App, cnameOnly bool) error {
 		app1.GetRoutersWithAddr()
 		app2.GetRoutersWithAddr()
 	}(app1, app2)
-	err = r1.Swap(app1.Name, app2.Name, cnameOnly)
+	err = r1.Swap(ctx, app1.Name, app2.Name, cnameOnly)
 	if err != nil {
 		return err
 	}
@@ -2022,7 +2078,7 @@ func Swap(app1, app2 *App, cnameOnly bool) error {
 
 // Start starts the app calling the provisioner.Start method and
 // changing the units state to StatusStarted.
-func (app *App) Start(w io.Writer, process, versionStr string) error {
+func (app *App) Start(ctx context.Context, w io.Writer, process, versionStr string) error {
 	w = app.withLogWriter(w)
 	msg := fmt.Sprintf("\n ---> Starting the process %q", process)
 	if process == "" {
@@ -2037,7 +2093,7 @@ func (app *App) Start(w io.Writer, process, versionStr string) error {
 	if err != nil {
 		return err
 	}
-	err = prov.Start(app, process, version)
+	err = prov.Start(ctx, app, process, version)
 	if err != nil {
 		log.Errorf("[start] error on start the app %s - %s", app.Name, err)
 		return newErrorWithLog(err, app, "start")
@@ -2062,16 +2118,16 @@ func (app *App) GetUpdatePlatform() bool {
 	return app.UpdatePlatform
 }
 
-func (app *App) RegisterUnit(unitId string, customData map[string]interface{}) error {
+func (app *App) RegisterUnit(ctx context.Context, unitId string, customData map[string]interface{}) error {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return err
 	}
-	err = prov.RegisterUnit(app, unitId, customData)
+	err = prov.RegisterUnit(ctx, app, unitId, customData)
 	if err != nil {
 		return err
 	}
-	units, err := prov.Units(app)
+	units, err := prov.Units(ctx, app)
 	if err != nil {
 		return err
 	}
@@ -2086,14 +2142,14 @@ func (app *App) RegisterUnit(unitId string, customData map[string]interface{}) e
 
 func (app *App) AddRouter(appRouter appTypes.AppRouter) error {
 	defer rebuild.RoutesRebuildOrEnqueue(app.Name)
-	r, err := router.Get(appRouter.Name)
+	r, err := router.Get(app.ctx, appRouter.Name)
 	if err != nil {
 		return err
 	}
 	if optsRouter, ok := r.(router.OptsRouter); ok {
-		err = optsRouter.AddBackendOpts(app, appRouter.Opts)
+		err = optsRouter.AddBackendOpts(app.ctx, app, appRouter.Opts)
 	} else {
-		err = r.AddBackend(app)
+		err = r.AddBackend(app.ctx, app)
 	}
 	if err != nil {
 		return err
@@ -2101,7 +2157,7 @@ func (app *App) AddRouter(appRouter appTypes.AppRouter) error {
 	routers := append(app.GetRouters(), appRouter)
 	err = app.updateRoutersDB(routers)
 	if err != nil {
-		rollbackErr := r.RemoveBackend(appRouter.Name)
+		rollbackErr := r.RemoveBackend(app.ctx, appRouter.Name)
 		if rollbackErr != nil {
 			log.Errorf("unable to remove router backend rolling back add router: %v", rollbackErr)
 		}
@@ -2122,7 +2178,7 @@ func (app *App) UpdateRouter(appRouter appTypes.AppRouter) error {
 	if existing == nil {
 		return &router.ErrRouterNotFound{Name: appRouter.Name}
 	}
-	r, err := router.Get(appRouter.Name)
+	r, err := router.Get(app.ctx, appRouter.Name)
 	if err != nil {
 		return err
 	}
@@ -2136,7 +2192,7 @@ func (app *App) UpdateRouter(appRouter appTypes.AppRouter) error {
 	if err != nil {
 		return err
 	}
-	err = optsRouter.UpdateBackendOpts(app, appRouter.Opts)
+	err = optsRouter.UpdateBackendOpts(app.ctx, app, appRouter.Opts)
 	if err != nil {
 		existing.Opts = oldOpts
 		rollbackErr := app.updateRoutersDB(routers)
@@ -2162,7 +2218,7 @@ func (app *App) RemoveRouter(name string) error {
 	if !removed {
 		return &router.ErrRouterNotFound{Name: name}
 	}
-	r, err := router.Get(name)
+	r, err := router.Get(app.ctx, name)
 	if err != nil {
 		return err
 	}
@@ -2170,7 +2226,7 @@ func (app *App) RemoveRouter(name string) error {
 	if err != nil {
 		return err
 	}
-	err = r.RemoveBackend(app.Name)
+	err = r.RemoveBackend(app.ctx, app.Name)
 	if err != nil {
 		log.Errorf("unable to remove router backend: %v", err)
 	}
@@ -2216,18 +2272,18 @@ func (app *App) GetRoutersWithAddr() ([]appTypes.AppRouter, error) {
 	multi := tsuruErrors.NewMultiError()
 	for i := range routers {
 		routerName := routers[i].Name
-		r, err := router.Get(routerName)
+		r, routerType, err := router.GetWithType(app.ctx, routerName)
 		if err != nil {
 			multi.Add(err)
 			continue
 		}
-		addr, err := r.Addr(app.Name)
+		addr, err := r.Addr(app.ctx, app.Name)
 		if err != nil {
 			multi.Add(err)
 			continue
 		}
 		if statusRouter, ok := r.(router.StatusRouter); ok {
-			status, detail, stErr := statusRouter.GetBackendStatus(app.Name)
+			status, detail, stErr := statusRouter.GetBackendStatus(app.ctx, app.Name)
 			if stErr != nil {
 				multi.Add(err)
 				continue
@@ -2236,20 +2292,19 @@ func (app *App) GetRoutersWithAddr() ([]appTypes.AppRouter, error) {
 			routers[i].StatusDetail = detail
 		}
 		if prefixRouter, ok := r.(router.PrefixRouter); ok {
-			addrs, aErr := prefixRouter.Addresses(app.Name)
+			addrs, aErr := prefixRouter.Addresses(app.ctx, app.Name)
 			if aErr != nil {
 				multi.Add(aErr)
 				continue
 			}
 			routers[i].Addresses = addrs
 		}
-		servicemanager.AppCache.Create(cache.CacheEntry{
+		servicemanager.AppCache.Create(app.ctx, cache.CacheEntry{
 			Key:   appRouterAddrKey(app.Name, routerName),
 			Value: addr,
 		})
 		routers[i].Address = addr
-		rType, _, _ := router.Type(routerName)
-		routers[i].Type = rType
+		routers[i].Type = routerType
 	}
 	return routers, multi.ToError()
 }
@@ -2279,7 +2334,7 @@ func (app *App) Shell(opts provision.ExecOptions) error {
 	}
 	opts.App = app
 	opts.Cmds = cmdsForExec("bash -l")
-	return execProv.ExecuteCommand(opts)
+	return execProv.ExecuteCommand(app.ctx, opts)
 }
 
 func (app *App) SetCertificate(name, certificate, key string) error {
@@ -2301,7 +2356,7 @@ func (app *App) SetCertificate(name, certificate, key string) error {
 	}
 	addedAny := false
 	for _, appRouter := range app.GetRouters() {
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(app.ctx, appRouter.Name)
 		if err != nil {
 			return err
 		}
@@ -2310,7 +2365,7 @@ func (app *App) SetCertificate(name, certificate, key string) error {
 			continue
 		}
 		addedAny = true
-		err = tlsRouter.AddCertificate(app, name, certificate, key)
+		err = tlsRouter.AddCertificate(app.ctx, app, name, certificate, key)
 		if err != nil {
 			return err
 		}
@@ -2328,7 +2383,7 @@ func (app *App) RemoveCertificate(name string) error {
 	}
 	removedAny := false
 	for _, appRouter := range app.GetRouters() {
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(app.ctx, appRouter.Name)
 		if err != nil {
 			return err
 		}
@@ -2337,7 +2392,7 @@ func (app *App) RemoveCertificate(name string) error {
 			continue
 		}
 		removedAny = true
-		err = tlsRouter.RemoveCertificate(app, name)
+		err = tlsRouter.RemoveCertificate(app.ctx, app, name)
 		if err != nil {
 			return err
 		}
@@ -2375,7 +2430,7 @@ func (app *App) GetCertificates() (map[string]map[string]string, error) {
 	allCertificates := make(map[string]map[string]string)
 	for _, appRouter := range app.GetRouters() {
 		certificates := make(map[string]string)
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(app.ctx, appRouter.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -2384,7 +2439,7 @@ func (app *App) GetCertificates() (map[string]map[string]string, error) {
 			continue
 		}
 		for _, n := range names {
-			cert, err := tlsRouter.GetCertificate(app, n)
+			cert, err := tlsRouter.GetCertificate(app.ctx, app, n)
 			if err != nil && err != router.ErrCertificateNotFound {
 				return nil, errors.Wrapf(err, "error in router %q", appRouter.Name)
 			}
@@ -2398,12 +2453,12 @@ func (app *App) GetCertificates() (map[string]map[string]string, error) {
 	return allCertificates, nil
 }
 
-func (app *App) RoutableAddresses() ([]appTypes.RoutableAddresses, error) {
+func (app *App) RoutableAddresses(ctx context.Context) ([]appTypes.RoutableAddresses, error) {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return nil, err
 	}
-	return prov.RoutableAddresses(app)
+	return prov.RoutableAddresses(ctx, app)
 }
 
 func (app *App) withLogWriter(w io.Writer) io.Writer {
@@ -2416,7 +2471,7 @@ func (app *App) withLogWriter(w io.Writer) io.Writer {
 	return w
 }
 
-func RenameTeam(oldName, newName string) error {
+func RenameTeam(ctx context.Context, oldName, newName string) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err
@@ -2425,7 +2480,7 @@ func RenameTeam(oldName, newName string) error {
 	filter := &Filter{}
 	filter.ExtraIn("teams", oldName)
 	filter.ExtraIn("teamowner", oldName)
-	apps, err := List(filter)
+	apps, err := List(ctx, filter)
 	if err != nil {
 		return err
 	}
@@ -2458,7 +2513,7 @@ func RenameTeam(oldName, newName string) error {
 }
 
 func (app *App) GetHealthcheckData() (routerTypes.HealthcheckData, error) {
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app)
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app.ctx, app)
 	if err != nil {
 		if err == appTypes.ErrNoVersionsAvailable {
 			err = nil
@@ -2490,7 +2545,7 @@ func validateEnv(envName string) error {
 	return nil
 }
 
-func (app *App) SetRoutable(version appTypes.AppVersion, isRoutable bool) error {
+func (app *App) SetRoutable(ctx context.Context, version appTypes.AppVersion, isRoutable bool) error {
 	prov, err := app.getProvisioner()
 	if err != nil {
 		return err
@@ -2499,10 +2554,21 @@ func (app *App) SetRoutable(version appTypes.AppVersion, isRoutable bool) error 
 	if !ok {
 		return errors.Errorf("provisioner %v does not support setting versions routable", prov.GetName())
 	}
-	return rprov.ToggleRoutable(app, version, isRoutable)
+	return rprov.ToggleRoutable(ctx, app, version, isRoutable)
 }
 
-func (app *App) getVersion(version string) (appTypes.AppVersion, error) {
+func (app *App) DeployedVersions() ([]int, error) {
+	prov, err := app.getProvisioner()
+	if err != nil {
+		return nil, err
+	}
+	if rprov, ok := prov.(provision.VersionsProvisioner); ok {
+		return rprov.DeployedVersions(app.ctx, app)
+	}
+	return nil, ErrNoVersionProvisioner
+}
+
+func (app *App) getVersion(ctx context.Context, version string) (appTypes.AppVersion, error) {
 	versionProv, v, err := app.explicitVersion(version)
 	if err != nil {
 		return nil, err
@@ -2511,18 +2577,18 @@ func (app *App) getVersion(version string) (appTypes.AppVersion, error) {
 		return v, nil
 	}
 
-	versions, err := versionProv.DeployedVersions(app)
+	versions, err := versionProv.DeployedVersions(ctx, app)
 	if err != nil {
 		return nil, err
 	}
 	if len(versions) == 0 {
-		return servicemanager.AppVersion.LatestSuccessfulVersion(app)
+		return servicemanager.AppVersion.LatestSuccessfulVersion(app.ctx, app)
 	}
 	if len(versions) > 1 {
 		return nil, errors.Errorf("more than one version deployed, you must select one")
 	}
 
-	return servicemanager.AppVersion.VersionByImageOrVersion(app, strconv.Itoa(versions[0]))
+	return servicemanager.AppVersion.VersionByImageOrVersion(app.ctx, app, strconv.Itoa(versions[0]))
 }
 
 func (app *App) getVersionAllowNil(version string) (appTypes.AppVersion, error) {
@@ -2538,12 +2604,12 @@ func (app *App) explicitVersion(version string) (provision.VersionsProvisioner, 
 	versionProv, isVersionProv := prov.(provision.VersionsProvisioner)
 
 	if !isVersionProv {
-		latest, err := servicemanager.AppVersion.LatestSuccessfulVersion(app)
+		latest, err := servicemanager.AppVersion.LatestSuccessfulVersion(app.ctx, app)
 		if err != nil {
 			return nil, nil, err
 		}
 		if version != "" && version != "0" {
-			v, err := servicemanager.AppVersion.VersionByImageOrVersion(app, version)
+			v, err := servicemanager.AppVersion.VersionByImageOrVersion(app.ctx, app, version)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2555,9 +2621,49 @@ func (app *App) explicitVersion(version string) (provision.VersionsProvisioner, 
 	}
 
 	if version != "" && version != "0" {
-		v, err := servicemanager.AppVersion.VersionByImageOrVersion(app, version)
+		v, err := servicemanager.AppVersion.VersionByImageOrVersion(app.ctx, app, version)
 		return versionProv, v, err
 	}
 
 	return versionProv, nil, nil
+}
+
+func (app *App) ListTags() []string {
+	return app.Tags
+}
+
+func (app *App) AutoScaleInfo() ([]provision.AutoScaleSpec, error) {
+	prov, err := app.getProvisioner()
+	if err != nil {
+		return nil, err
+	}
+	autoscaleProv, ok := prov.(provision.AutoScaleProvisioner)
+	if !ok {
+		return nil, nil
+	}
+	return autoscaleProv.GetAutoScale(app.ctx, app)
+}
+
+func (app *App) AutoScale(spec provision.AutoScaleSpec) error {
+	prov, err := app.getProvisioner()
+	if err != nil {
+		return err
+	}
+	autoscaleProv, ok := prov.(provision.AutoScaleProvisioner)
+	if !ok {
+		return errors.Errorf("provisioner %q does not support native autoscaling", prov.GetName())
+	}
+	return autoscaleProv.SetAutoScale(app.ctx, app, spec)
+}
+
+func (app *App) RemoveAutoScale(process string) error {
+	prov, err := app.getProvisioner()
+	if err != nil {
+		return err
+	}
+	autoscaleProv, ok := prov.(provision.AutoScaleProvisioner)
+	if !ok {
+		return errors.Errorf("provisioner %q does not support native autoscaling", prov.GetName())
+	}
+	return autoscaleProv.RemoveAutoScale(app.ctx, app, process)
 }

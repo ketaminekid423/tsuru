@@ -12,6 +12,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -30,15 +31,11 @@ type Storage struct {
 	*storage.Storage
 }
 
-type LogStorage struct {
-	*storage.Storage
-}
-
 func init() {
 	hc.AddChecker("MongoDB", healthCheck)
 }
 
-func healthCheck() error {
+func healthCheck(ctx context.Context) error {
 	conn, err := Conn()
 	if err != nil {
 		return err
@@ -75,16 +72,6 @@ func Conn() (*Storage, error) {
 		err  error
 	)
 	url, dbname := DbConfig("")
-	strg.Storage, err = storage.Open(url, dbname)
-	return &strg, err
-}
-
-func LogConn() (*LogStorage, error) {
-	var (
-		strg LogStorage
-		err  error
-	)
-	url, dbname := DbConfig("logdb-")
 	strg.Storage, err = storage.Open(url, dbname)
 	return &strg, err
 }
@@ -150,27 +137,6 @@ func (s *Storage) SAMLRequests() *storage.Collection {
 	return coll
 }
 
-var logCappedInfo = mgo.CollectionInfo{
-	Capped:   true,
-	MaxBytes: 200 * 5000,
-	MaxDocs:  5000,
-}
-
-// AppLogCollection returns the logs collection for one app from MongoDB.
-func (s *LogStorage) AppLogCollection(appName string) *storage.Collection {
-	if appName == "" {
-		return nil
-	}
-	return s.Collection("logs_" + appName)
-}
-
-// CreateAppLogCollection creates a new capped collection to store logs for an app.
-func (s *LogStorage) CreateAppLogCollection(appName string) (*storage.Collection, error) {
-	c := s.AppLogCollection(appName)
-	err := c.Create(&logCappedInfo)
-	return c, err
-}
-
 func (s *Storage) Roles() *storage.Collection {
 	return s.Collection("roles")
 }
@@ -189,6 +155,10 @@ func (s *Storage) Events() *storage.Collection {
 	runningIndex := mgo.Index{Key: []string{"running"}}
 	removedIndex := mgo.Index{Key: []string{"removedate"}}
 	allowedSchemeIndex := mgo.Index{Key: []string{"allowed.scheme"}}
+	latestTargetKindIndex := mgo.Index{Key: []string{"target.value", "kind.name", "-starttime"}, Background: true}
+	latestTargetIndex := mgo.Index{Key: []string{"target.value", "-starttime"}, Background: true}
+	latestExtraTargetIndex := mgo.Index{Key: []string{"extratargets.target.value", "-starttime"}, Background: true}
+
 	c := s.Collection("events")
 	c.EnsureIndex(ownerIndex)
 	c.EnsureIndex(targetIndex)
@@ -199,6 +169,9 @@ func (s *Storage) Events() *storage.Collection {
 	c.EnsureIndex(runningIndex)
 	c.EnsureIndex(removedIndex)
 	c.EnsureIndex(allowedSchemeIndex)
+	c.EnsureIndex(latestTargetKindIndex)
+	c.EnsureIndex(latestTargetIndex)
+	c.EnsureIndex(latestExtraTargetIndex)
 	return c
 }
 

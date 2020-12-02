@@ -41,7 +41,6 @@ func Test(t *testing.T) { check.TestingT(t) }
 
 type S struct {
 	conn        *db.Storage
-	logConn     *db.LogStorage
 	team        authTypes.Team
 	user        *auth.User
 	provisioner *provisiontest.FakeProvisioner
@@ -91,22 +90,10 @@ func (s *S) createUserAndTeam(c *check.C) {
 	s.team = authTypes.Team{Name: "tsuruteam"}
 }
 
-func (s *S) dropAppLogCollections() {
-	logdb := s.logConn.AppLogCollection("myapp").Database
-	colls, err := logdb.CollectionNames()
-	if err != nil {
-		return
-	}
-	for _, coll := range colls {
-		if len(coll) > 5 && coll[0:5] == "logs_" {
-			logdb.C(coll).DropCollection()
-		}
-	}
-}
-
 var nativeScheme = auth.Scheme(native.NativeScheme{})
 
 func (s *S) SetUpSuite(c *check.C) {
+	TestLogWriterWaitOnClose = true
 	err := config.ReadConfigFile("testdata/config.yaml")
 	c.Assert(err, check.IsNil)
 	config.Set("log:disable-syslog", true)
@@ -117,8 +104,6 @@ func (s *S) SetUpSuite(c *check.C) {
 	config.Set("routers:fake-tls:type", "fake-tls")
 	config.Set("auth:hash-cost", bcrypt.MinCost)
 	s.conn, err = db.Conn()
-	c.Assert(err, check.IsNil)
-	s.logConn, err = db.LogConn()
 	c.Assert(err, check.IsNil)
 	s.provisioner = provisiontest.ProvisionerInstance
 	provision.DefaultProvisioner = "fake"
@@ -131,9 +116,7 @@ func (s *S) SetUpSuite(c *check.C) {
 
 func (s *S) TearDownSuite(c *check.C) {
 	defer s.conn.Close()
-	defer s.logConn.Close()
-	s.conn.Apps().Database.DropDatabase()
-	s.logConn.AppLogCollection("myapp").Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 }
 
 func (s *S) SetUpTest(c *check.C) {
@@ -152,7 +135,7 @@ func (s *S) SetUpTest(c *check.C) {
 	routertest.OptsRouter.Reset()
 	pool.ResetCache()
 	err := rebuild.Initialize(func(appName string) (rebuild.RebuildApp, error) {
-		a, err := GetByName(appName)
+		a, err := GetByName(context.TODO(), appName)
 		if err == appTypes.ErrAppNotFound {
 			return nil, nil
 		}
@@ -163,7 +146,6 @@ func (s *S) SetUpTest(c *check.C) {
 	s.provisioner.Reset()
 	repositorytest.Reset()
 	dbtest.ClearAllCollections(s.conn.Apps().Database)
-	s.dropAppLogCollections()
 	s.createUserAndTeam(c)
 	s.defaultPlan = appTypes.Plan{
 		Name:     "default-plan",
@@ -174,13 +156,15 @@ func (s *S) SetUpTest(c *check.C) {
 	}
 	s.Pool = "pool1"
 	opts := pool.AddPoolOptions{Name: s.Pool, Default: true}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
-	repository.Manager().CreateUser(s.user.Email)
+	repository.Manager().CreateUser(context.TODO(), s.user.Email)
 	s.builder = &builder.MockBuilder{}
 	builder.Register("fake", s.builder)
 	builder.DefaultBuilder = "fake"
 	setupMocks(s)
+	servicemanager.App, err = AppService()
+	c.Assert(err, check.IsNil)
 	servicemanager.AppLog, err = applog.AppLogService()
 	c.Assert(err, check.IsNil)
 	servicemanager.AppVersion, err = version.AppVersionService()
@@ -217,7 +201,7 @@ func setupMocks(s *S) {
 		return &s.defaultPlan, nil
 	}
 	s.builder.OnBuild = func(p provision.BuilderDeploy, app provision.App, evt *event.Event, opts *builder.BuildOpts) (appTypes.AppVersion, error) {
-		version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+		version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 			App: app,
 		})
 		if err != nil {

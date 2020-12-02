@@ -5,6 +5,7 @@
 package pool
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/tsuru/tsuru/router"
 	"github.com/tsuru/tsuru/service"
 	"github.com/tsuru/tsuru/servicemanager"
+	servicemock "github.com/tsuru/tsuru/servicemanager/mock"
 	_ "github.com/tsuru/tsuru/storage/mongodb"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	authTypes "github.com/tsuru/tsuru/types/auth"
@@ -45,10 +47,11 @@ func (s *S) SetUpSuite(c *check.C) {
 	var err error
 	s.storage, err = db.Conn()
 	c.Assert(err, check.IsNil)
+	servicemock.SetMockService(&servicemock.MockService{})
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.storage.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.storage.Apps().Database)
 	s.storage.Close()
 }
 
@@ -116,12 +119,12 @@ func (s *S) TestAddPool(c *check.C) {
 		{"p", nil},
 	}
 	for _, t := range tt {
-		err := AddPool(AddPoolOptions{Name: t.name})
+		err := AddPool(context.TODO(), AddPoolOptions{Name: t.name})
 		c.Assert(err, check.DeepEquals, t.expectedErr, check.Commentf("%s", t.name))
 		if t.expectedErr == nil {
-			pool, err := GetPoolByName(t.name)
+			pool, err := GetPoolByName(context.TODO(), t.name)
 			c.Assert(err, check.IsNil, check.Commentf("%s", t.name))
-			c.Assert(pool, check.DeepEquals, &Pool{Name: t.name}, check.Commentf("%s", t.name))
+			c.Assert(pool.Name, check.Equals, t.name, check.Commentf("%s", t.name))
 		}
 	}
 }
@@ -133,7 +136,7 @@ func (s *S) TestAddNonPublicPool(c *check.C) {
 		Public:  false,
 		Default: false,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	var p Pool
 	err = coll.Find(bson.M{"_id": "pool1"}).One(&p)
@@ -150,7 +153,7 @@ func (s *S) TestAddPublicPool(c *check.C) {
 		Public:  true,
 		Default: false,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	var p Pool
 	err = coll.Find(bson.M{"_id": "pool1"}).One(&p)
@@ -166,7 +169,7 @@ func (s *S) TestAddPoolWithoutNameShouldBreak(c *check.C) {
 		Public:  false,
 		Default: false,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Pool name is required.")
 }
@@ -177,7 +180,7 @@ func (s *S) TestAddDefaultPool(c *check.C) {
 		Public:  false,
 		Default: true,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 }
 
@@ -187,7 +190,7 @@ func (s *S) TestAddTeamToPoolNotFound(c *check.C) {
 }
 
 func (s *S) TestDefaultPoolCantHaveTeam(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "nonteams", Public: false, Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "nonteams", Public: false, Default: true})
 	c.Assert(err, check.IsNil)
 	err = AddTeamsToPool("nonteams", []string{"ateam"})
 	c.Assert(err, check.NotNil)
@@ -195,16 +198,16 @@ func (s *S) TestDefaultPoolCantHaveTeam(c *check.C) {
 }
 
 func (s *S) TestDefaultPoolShouldBeUnique(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "nonteams", Public: false, Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "nonteams", Public: false, Default: true})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool1", Public: false, Default: true})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool1", Public: false, Default: true})
 	c.Assert(err, check.NotNil)
 }
 
 func (s *S) TestAddPoolNameShouldBeUnique(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "mypool"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "mypool"})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "mypool"})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "mypool"})
 	c.Assert(err, check.DeepEquals, ErrPoolAlreadyExists)
 }
 
@@ -215,7 +218,7 @@ func (s *S) TestForceAddDefaultPool(c *check.C) {
 		Public:  false,
 		Default: true,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	opts = AddPoolOptions{
 		Name:    "pool2",
@@ -223,7 +226,7 @@ func (s *S) TestForceAddDefaultPool(c *check.C) {
 		Default: true,
 		Force:   true,
 	}
-	err = AddPool(opts)
+	err = AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	var p Pool
 	err = coll.Find(bson.M{"_id": "pool1"}).One(&p)
@@ -298,7 +301,7 @@ func (s *S) TestAddTeamToPollShouldNotAcceptDuplicatedTeam(c *check.C) {
 }
 
 func (s *S) TestAddTeamsToAPublicPool(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "nonteams", Public: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "nonteams", Public: true})
 	c.Assert(err, check.IsNil)
 	err = AddTeamsToPool("nonteams", []string{"ateam"})
 	c.Assert(err, check.NotNil)
@@ -363,7 +366,7 @@ func boolPtr(v bool) *bool {
 }
 
 func (s *S) TestPoolUpdateNotFound(c *check.C) {
-	err := PoolUpdate("notfound", UpdatePoolOptions{Public: boolPtr(true)})
+	err := PoolUpdate(context.TODO(), "notfound", UpdatePoolOptions{Public: boolPtr(true)})
 	c.Assert(err, check.Equals, ErrPoolNotFound)
 }
 
@@ -372,9 +375,9 @@ func (s *S) TestPoolUpdate(c *check.C) {
 		Name:   "pool1",
 		Public: false,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
-	err = PoolUpdate("pool1", UpdatePoolOptions{Public: boolPtr(true)})
+	err = PoolUpdate(context.TODO(), "pool1", UpdatePoolOptions{Public: boolPtr(true)})
 	c.Assert(err, check.IsNil)
 	constraint, err := getExactConstraintForPool("pool1", "team")
 	c.Assert(err, check.IsNil)
@@ -387,43 +390,43 @@ func (s *S) TestPoolUpdateToDefault(c *check.C) {
 		Public:  false,
 		Default: false,
 	}
-	err := AddPool(opts)
+	err := AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
-	err = PoolUpdate("pool1", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true)})
+	err = PoolUpdate(context.TODO(), "pool1", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true)})
 	c.Assert(err, check.IsNil)
-	p, err := GetPoolByName("pool1")
+	p, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Default, check.Equals, true)
 }
 
 func (s *S) TestPoolUpdateForceToDefault(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1", Public: false, Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1", Public: false, Default: true})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool2", Public: false, Default: false})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool2", Public: false, Default: false})
 	c.Assert(err, check.IsNil)
-	err = PoolUpdate("pool2", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true), Force: true})
+	err = PoolUpdate(context.TODO(), "pool2", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true), Force: true})
 	c.Assert(err, check.IsNil)
-	p, err := GetPoolByName("pool2")
+	p, err := GetPoolByName(context.TODO(), "pool2")
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Default, check.Equals, true)
 }
 
 func (s *S) TestPoolUpdateDefaultAttrFailIfDefaultPoolAlreadyExists(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1", Public: false, Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1", Public: false, Default: true})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool2", Public: false, Default: false})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool2", Public: false, Default: false})
 	c.Assert(err, check.IsNil)
-	err = PoolUpdate("pool2", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true)})
+	err = PoolUpdate(context.TODO(), "pool2", UpdatePoolOptions{Public: boolPtr(true), Default: boolPtr(true)})
 	c.Assert(err, check.NotNil)
 	c.Assert(err, check.Equals, ErrDefaultPoolAlreadyExists)
 }
 
 func (s *S) TestPoolUpdateDontHaveSideEffects(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1", Public: false, Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1", Public: false, Default: true})
 	c.Assert(err, check.IsNil)
-	err = PoolUpdate("pool1", UpdatePoolOptions{Public: boolPtr(true)})
+	err = PoolUpdate(context.TODO(), "pool1", UpdatePoolOptions{Public: boolPtr(true)})
 	c.Assert(err, check.IsNil)
-	p, err := GetPoolByName("pool1")
+	p, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Default, check.Equals, true)
 	constraint, err := getExactConstraintForPool("pool1", "team")
@@ -432,13 +435,13 @@ func (s *S) TestPoolUpdateDontHaveSideEffects(c *check.C) {
 }
 
 func (s *S) TestListPool(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool2", Default: true})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool2", Default: true})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool3"})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool3"})
 	c.Assert(err, check.IsNil)
-	pools, err := ListPools("pool1", "pool3")
+	pools, err := ListPools(context.TODO(), "pool1", "pool3")
 	c.Assert(err, check.IsNil)
 	c.Assert(len(pools), check.Equals, 2)
 	c.Assert(pools[0].Name, check.Equals, "pool1")
@@ -446,9 +449,9 @@ func (s *S) TestListPool(c *check.C) {
 }
 
 func (s *S) TestListPoolsForTeam(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool2"})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool2"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{
 		PoolExpr: "pool1",
@@ -462,15 +465,15 @@ func (s *S) TestListPoolsForTeam(c *check.C) {
 		Values:   []string{"team2"},
 	})
 	c.Assert(err, check.IsNil)
-	pools, err := ListPoolsForTeam("team1")
+	pools, err := ListPoolsForTeam(context.TODO(), "team1")
 	c.Assert(err, check.IsNil)
 	c.Assert(pools, check.HasLen, 1)
 }
 
 func (s *S) TestListPossiblePoolsAll(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1", Default: true})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1", Default: true})
 	c.Assert(err, check.IsNil)
-	pools, err := ListPossiblePools(nil)
+	pools, err := ListPossiblePools(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(pools, check.HasLen, 1)
 }
@@ -483,14 +486,14 @@ func (s *S) TestListPoolByQuery(c *check.C) {
 	pool2 := Pool{Name: "pool2", Default: true}
 	err = coll.Insert(pool2)
 	c.Assert(err, check.IsNil)
-	pools, err := listPools(bson.M{"_id": "pool2"})
+	pools, err := listPools(context.TODO(), bson.M{"_id": "pool2"})
 	c.Assert(err, check.IsNil)
 	c.Assert(pools, check.HasLen, 1)
 	c.Assert(pools[0].Name, check.Equals, "pool2")
 }
 
 func (s *S) TestListPoolEmpty(c *check.C) {
-	pools, err := ListPossiblePools(nil)
+	pools, err := ListPossiblePools(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(pools, check.HasLen, 0)
 }
@@ -500,10 +503,10 @@ func (s *S) TestGetPoolByName(c *check.C) {
 	pool := Pool{Name: "pool1", Default: true}
 	err := coll.Insert(pool)
 	c.Assert(err, check.IsNil)
-	p, err := GetPoolByName(pool.Name)
+	p, err := GetPoolByName(context.TODO(), pool.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Name, check.Equals, pool.Name)
-	p, err = GetPoolByName("not found")
+	p, err = GetPoolByName(context.TODO(), "not found")
 	c.Assert(p, check.IsNil)
 	c.Assert(err, check.NotNil)
 }
@@ -512,11 +515,11 @@ func (s *S) TestGetRouters(c *check.C) {
 	config.Set("routers:router1:type", "hipache")
 	config.Set("routers:router2:type", "hipache")
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypeRouter, Values: []string{"router2"}, Blacklist: true})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	routers, err := pool.GetRouters()
 	c.Assert(err, check.IsNil)
@@ -528,11 +531,11 @@ func (s *S) TestGetRouters(c *check.C) {
 }
 
 func (s *S) TestGetPlans(c *check.C) {
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypePlan, Values: []string{"plan1"}, Blacklist: true})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	plans, err := pool.GetPlans()
 	c.Assert(err, check.IsNil)
@@ -550,9 +553,9 @@ func (s *S) TestGetServices(c *check.C) {
 	serv := service.Service{Name: "demacia", Password: "pentakill", Endpoint: map[string]string{"production": "http://localhost:1234"}, OwnerTeams: []string{"ateam"}}
 	err := service.Create(serv)
 	c.Assert(err, check.IsNil)
-	err = AddPool(AddPoolOptions{Name: "pool1"})
+	err = AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	services, err := pool.GetServices()
 	c.Assert(err, check.IsNil)
@@ -563,11 +566,11 @@ func (s *S) TestGetDefaultRouterFromConstraint(c *check.C) {
 	config.Set("routers:router1:type", "hipache")
 	config.Set("routers:router2:type", "hipache")
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypeRouter, Values: []string{"router2"}, Blacklist: false})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	r, err := pool.GetDefaultRouter()
 	c.Assert(err, check.IsNil)
@@ -578,11 +581,11 @@ func (s *S) TestGetDefaultRouterNoDefault(c *check.C) {
 	config.Set("routers:router1:type", "hipache")
 	config.Set("routers:router2:type", "hipache")
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypeRouter, Values: []string{"*"}, Blacklist: false})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	r, err := pool.GetDefaultRouter()
 	c.Assert(err, check.Equals, router.ErrDefaultRouterNotFound)
@@ -594,9 +597,9 @@ func (s *S) TestGetDefaultFallbackFromConfig(c *check.C) {
 	config.Set("routers:router2:type", "hipache")
 	config.Set("routers:router2:default", true)
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	r, err := pool.GetDefaultRouter()
 	c.Assert(err, check.Equals, nil)
@@ -606,11 +609,11 @@ func (s *S) TestGetDefaultFallbackFromConfig(c *check.C) {
 func (s *S) TestGetDefaultAllowAllSingleAllowedValue(c *check.C) {
 	config.Set("routers:router2:type", "hipache")
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypeRouter, Values: []string{"router*"}, Blacklist: false})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	r, err := pool.GetDefaultRouter()
 	c.Assert(err, check.IsNil)
@@ -621,11 +624,11 @@ func (s *S) TestGetDefaultBlacklistSingleAllowedValue(c *check.C) {
 	config.Set("routers:router1:type", "hipache")
 	config.Set("routers:router2:type", "hipache")
 	defer config.Unset("routers")
-	err := AddPool(AddPoolOptions{Name: "pool1"})
+	err := AddPool(context.TODO(), AddPoolOptions{Name: "pool1"})
 	c.Assert(err, check.IsNil)
 	err = SetPoolConstraint(&PoolConstraint{PoolExpr: "pool*", Field: ConstraintTypeRouter, Values: []string{"router2"}, Blacklist: true})
 	c.Assert(err, check.IsNil)
-	pool, err := GetPoolByName("pool1")
+	pool, err := GetPoolByName(context.TODO(), "pool1")
 	c.Assert(err, check.IsNil)
 	r, err := pool.GetDefaultRouter()
 	c.Assert(err, check.IsNil)
@@ -681,7 +684,7 @@ func (s *S) TestRenamePoolTeam(c *check.C) {
 		err := SetPoolConstraint(&constraint)
 		c.Assert(err, check.IsNil)
 	}
-	err := RenamePoolTeam("t2", "t9000")
+	err := RenamePoolTeam(context.TODO(), "t2", "t9000")
 	c.Assert(err, check.IsNil)
 	var cs []PoolConstraint
 	err = coll.Find(nil).Sort("poolexpr").All(&cs)
@@ -698,14 +701,14 @@ func (s *S) TestGetProvisionerForPool(c *check.C) {
 	pool := Pool{Name: "pool1", Default: true, Provisioner: "fake"}
 	err := coll.Insert(pool)
 	c.Assert(err, check.IsNil)
-	prov, err := GetProvisionerForPool(pool.Name)
+	prov, err := GetProvisionerForPool(context.TODO(), pool.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(prov.GetName(), check.Equals, "fake")
 	c.Assert(poolCache.Get("pool1"), check.Equals, provisiontest.ProvisionerInstance)
-	prov, err = GetProvisionerForPool(pool.Name)
+	prov, err = GetProvisionerForPool(context.TODO(), pool.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(prov.GetName(), check.Equals, "fake")
-	prov, err = GetProvisionerForPool("not found")
+	prov, err = GetProvisionerForPool(context.TODO(), "not found")
 	c.Assert(prov, check.IsNil)
 	c.Assert(err, check.Equals, ErrPoolNotFound)
 }

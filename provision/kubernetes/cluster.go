@@ -5,6 +5,7 @@
 package kubernetes
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"net"
@@ -18,8 +19,10 @@ import (
 	"github.com/tsuru/tsuru/provision"
 	tsuruv1clientset "github.com/tsuru/tsuru/provision/kubernetes/pkg/client/clientset/versioned"
 	"github.com/tsuru/tsuru/servicemanager"
+	appTypes "github.com/tsuru/tsuru/types/app"
 	provTypes "github.com/tsuru/tsuru/types/provision"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -41,6 +44,12 @@ const (
 	disableHeadlessKey     = "disable-headless"
 	maxSurgeKey            = "max-surge"
 	maxUnavailableKey      = "max-unavailable"
+	singlePoolKey          = "single-pool"
+	ephemeralStorageKey    = "ephemeral-storage"
+	preStopSleepKey        = "pre-stop-sleep"
+
+	enableLogsFromAPIServerKey = "enable-logs-from-apiserver"
+	defaultLogsFromAPIServer   = false
 
 	dialTimeout  = 30 * time.Second
 	tcpKeepAlive = 30 * time.Second
@@ -59,6 +68,11 @@ var (
 		disableHeadlessKey:     "Disable headless service creation for every app-process. This config may be prefixed with `<pool-name>:`.",
 		maxSurgeKey:            "Max surge for deployments rollout. This config may be prefixed with `<pool-name>:`. Defaults to 100%.",
 		maxUnavailableKey:      "Max unavailable for deployments rollout. This config may be prefixed with `<pool-name>:`. Defaults to 0.",
+		singlePoolKey:          "Set to use entire cluster to a pool instead only designated nodes. Defaults do false.",
+		ephemeralStorageKey:    fmt.Sprintf("Sets limit for ephemeral storage for created pods. This config may be prefixed with `<pool-name>:`. Defaults to %s.", defaultEphemeralStorageLimit.String()),
+		preStopSleepKey:        fmt.Sprintf("Number of seconds to sleep in the preStop lifecycle hook. This config may be prefixed with `<pool-name>:`. Defaults to %d.", defaultPreStopSleepSeconds),
+
+		enableLogsFromAPIServerKey: "Enable tsuru to request application logs from kubernetes api-server, will be enabled by default in next tsuru major version",
 	}
 )
 
@@ -177,7 +191,7 @@ func (c *ClusterClient) SetTimeout(timeout time.Duration) error {
 	return nil
 }
 
-func (c *ClusterClient) AppNamespace(app provision.App) (string, error) {
+func (c *ClusterClient) AppNamespace(app appTypes.App) (string, error) {
 	if app == nil {
 		return c.Namespace(), nil
 	}
@@ -221,6 +235,36 @@ func (c *ClusterClient) Namespace() string {
 	return "tsuru"
 }
 
+func (c *ClusterClient) preStopSleepSeconds(pool string) int {
+	if c.CustomData == nil {
+		return defaultPreStopSleepSeconds
+	}
+	sleepRaw := c.configForContext(pool, preStopSleepKey)
+	if sleepRaw == "" {
+		return defaultPreStopSleepSeconds
+	}
+	sleep, err := strconv.Atoi(sleepRaw)
+	if err != nil {
+		return defaultPreStopSleepSeconds
+	}
+	return sleep
+}
+
+func (c *ClusterClient) ephemeralStorage(pool string) (resource.Quantity, error) {
+	if c.CustomData == nil {
+		return defaultEphemeralStorageLimit, nil
+	}
+	ephemeralRaw := c.configForContext(pool, ephemeralStorageKey)
+	if ephemeralRaw == "" {
+		return defaultEphemeralStorageLimit, nil
+	}
+	quantity, err := resource.ParseQuantity(ephemeralRaw)
+	if err != nil {
+		return defaultEphemeralStorageLimit, nil
+	}
+	return quantity, nil
+}
+
 func (c *ClusterClient) ExternalPolicyLocal(pool string) (bool, error) {
 	if c.CustomData == nil {
 		return false, nil
@@ -260,15 +304,26 @@ func (c *ClusterClient) OvercommitFactor(pool string) (int64, error) {
 	return int64(overcommit), err
 }
 
-func (c *ClusterClient) namespaceLabels(ns string) (map[string]string, error) {
+func (c *ClusterClient) LogsFromAPIServerEnabled() bool {
 	if c.CustomData == nil {
-		return nil, nil
+		return defaultLogsFromAPIServer
+	}
+
+	enabled, _ := strconv.ParseBool(c.CustomData[enableLogsFromAPIServerKey])
+	return enabled
+}
+
+func (c *ClusterClient) namespaceLabels(ns string) (map[string]string, error) {
+	labels := map[string]string{
+		"name": ns,
+	}
+	if c.CustomData == nil {
+		return labels, nil
 	}
 	nsLabelsConf := c.configForContext(ns, namespaceLabelsKey)
 	if nsLabelsConf == "" {
-		return nil, nil
+		return labels, nil
 	}
-	labels := make(map[string]string)
 	labelsRaw := strings.Split(nsLabelsConf, ",")
 	for _, l := range labelsRaw {
 		parts := strings.Split(l, "=")
@@ -316,6 +371,17 @@ func (c *ClusterClient) maxUnavailable(pool string) intstr.IntOrString {
 	return intstr.Parse(maxUnavailable)
 }
 
+func (c *ClusterClient) SinglePool() (bool, error) {
+	if c.CustomData == nil {
+		return false, nil
+	}
+	singlePool, ok := c.CustomData[singlePoolKey]
+	if singlePool == "" || !ok {
+		return false, nil
+	}
+	return strconv.ParseBool(singlePool)
+}
+
 func (c *ClusterClient) configForContext(context, key string) string {
 	if v, ok := c.CustomData[context+":"+key]; ok {
 		return v
@@ -336,13 +402,13 @@ type clusterApp struct {
 	apps   []provision.App
 }
 
-func clustersForApps(apps []provision.App) ([]clusterApp, error) {
+func clustersForApps(ctx context.Context, apps []provision.App) ([]clusterApp, error) {
 	clusterClientMap := map[string]clusterApp{}
 	var poolNames []string
 	for _, a := range apps {
 		poolNames = append(poolNames, a.GetPool())
 	}
-	clusterPoolMap, err := servicemanager.Cluster.FindByPools(provisionerName, poolNames)
+	clusterPoolMap, err := servicemanager.Cluster.FindByPools(ctx, provisionerName, poolNames)
 	if err != nil {
 		return nil, err
 	}
@@ -369,22 +435,22 @@ func clustersForApps(apps []provision.App) ([]clusterApp, error) {
 	return result, nil
 }
 
-func clusterForPool(pool string) (*ClusterClient, error) {
-	clust, err := servicemanager.Cluster.FindByPool(provisionerName, pool)
+func clusterForPool(ctx context.Context, pool string) (*ClusterClient, error) {
+	clust, err := servicemanager.Cluster.FindByPool(ctx, provisionerName, pool)
 	if err != nil {
 		return nil, err
 	}
 	return NewClusterClient(clust)
 }
 
-func clusterForPoolOrAny(pool string) (*ClusterClient, error) {
-	clust, err := clusterForPool(pool)
+func clusterForPoolOrAny(ctx context.Context, pool string) (*ClusterClient, error) {
+	clust, err := clusterForPool(ctx, pool)
 	if err == nil {
 		return clust, err
 	}
 	if err == provTypes.ErrNoCluster {
 		var clusters []provTypes.Cluster
-		clusters, err = servicemanager.Cluster.FindByProvisioner(provisionerName)
+		clusters, err = servicemanager.Cluster.FindByProvisioner(ctx, provisionerName)
 		if err == nil {
 			return NewClusterClient(&clusters[0])
 		}
@@ -392,8 +458,8 @@ func clusterForPoolOrAny(pool string) (*ClusterClient, error) {
 	return nil, err
 }
 
-func allClusters() ([]*ClusterClient, error) {
-	clusters, err := servicemanager.Cluster.FindByProvisioner(provisionerName)
+func allClusters(ctx context.Context) ([]*ClusterClient, error) {
+	clusters, err := servicemanager.Cluster.FindByProvisioner(ctx, provisionerName)
 	if err != nil {
 		return nil, err
 	}
@@ -407,8 +473,8 @@ func allClusters() ([]*ClusterClient, error) {
 	return clients, nil
 }
 
-func forEachCluster(fn func(client *ClusterClient) error) error {
-	clients, err := allClusters()
+func forEachCluster(ctx context.Context, fn func(client *ClusterClient) error) error {
+	clients, err := allClusters(ctx)
 	if err != nil {
 		return err
 	}

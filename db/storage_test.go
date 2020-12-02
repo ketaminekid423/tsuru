@@ -5,10 +5,12 @@
 package db
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	"github.com/tsuru/config"
+	"github.com/tsuru/tsuru/db/dbtest"
 	"github.com/tsuru/tsuru/db/storage"
 	check "gopkg.in/check.v1"
 )
@@ -60,11 +62,11 @@ func (s *S) TearDownSuite(c *check.C) {
 	defer strg.Close()
 	config.Unset("database:url")
 	config.Unset("database:name")
-	strg.Collection("apps").Database.DropDatabase()
+	dbtest.ClearAllCollections(strg.Apps().Database)
 }
 
 func (s *S) TestHealthCheck(c *check.C) {
-	err := healthCheck()
+	err := healthCheck(context.TODO())
 	c.Assert(err, check.IsNil)
 }
 
@@ -140,15 +142,6 @@ func (s *S) TestServiceInstances(c *check.C) {
 	serviceInstances := strg.ServiceInstances()
 	serviceInstancesc := strg.Collection("service_instances")
 	c.Assert(serviceInstances, check.DeepEquals, serviceInstancesc)
-}
-
-func (s *S) TestLogs(c *check.C) {
-	strg, err := LogConn()
-	c.Assert(err, check.IsNil)
-	defer strg.Close()
-	logs := strg.AppLogCollection("myapp")
-	logsc := strg.Collection("logs_myapp")
-	c.Assert(logs, check.DeepEquals, logsc)
 }
 
 func (s *S) TestRoles(c *check.C) {

@@ -5,6 +5,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"regexp"
@@ -61,7 +62,7 @@ var reserveUserApp = action.Action{
 		if err != nil {
 			return nil, err
 		}
-		if err := servicemanager.UserQuota.Inc(usr.Email, 1); err != nil {
+		if err := servicemanager.UserQuota.Inc(ctx.Context, usr, 1); err != nil {
 			return nil, err
 		}
 		return map[string]string{"app": app.Name, "user": user.Email}, nil
@@ -69,7 +70,7 @@ var reserveUserApp = action.Action{
 	Backward: func(ctx action.BWContext) {
 		m := ctx.FWResult.(map[string]string)
 		if user, err := auth.GetUserByEmail(m["user"]); err == nil {
-			servicemanager.UserQuota.Inc(user.Email, -1)
+			servicemanager.UserQuota.Inc(ctx.Context, user, -1)
 		}
 	},
 	MinParams: 2,
@@ -120,23 +121,17 @@ func createApp(app *App) error {
 		return ErrAppAlreadyExists
 	}
 
-	logConn, err := db.LogConn()
-	if err == nil {
-		defer logConn.Close()
-		logConn.CreateAppLogCollection(app.Name)
+	if plog, ok := servicemanager.AppLog.(appTypes.AppLogServiceProvision); ok {
+		plog.Provision(app.Name)
 	}
 	return nil
 }
 
 func removeApp(app *App) error {
-	logConn, err := db.LogConn()
-	if err != nil {
-		log.Errorf("Could not connect to the log database: %s", err)
-	} else {
-		defer logConn.Close()
-		err = logConn.AppLogCollection(app.Name).DropCollection()
+	if plog, ok := servicemanager.AppLog.(appTypes.AppLogServiceProvision); ok {
+		err := plog.CleanUp(app.Name)
 		if err != nil {
-			log.Errorf("Unable to remove logs collection: %s", err)
+			log.Errorf("Unable to cleanup logs: %v", err)
 		}
 	}
 
@@ -159,11 +154,11 @@ var createAppToken = action.Action{
 		if !ok {
 			return nil, errors.New("First parameter must be *App.")
 		}
-		app, err := GetByName(app.Name)
+		app, err := GetByName(ctx.Context, app.Name)
 		if err != nil {
 			return nil, err
 		}
-		t, err := AuthScheme.AppLogin(app.Name)
+		t, err := AuthScheme.AppLogin(ctx.Context, app.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +174,7 @@ var createAppToken = action.Action{
 			}
 		}
 		if tokenValue != "" {
-			AuthScheme.Logout(tokenValue)
+			AuthScheme.Logout(ctx.Context, tokenValue)
 		}
 	},
 	MinParams: 1,
@@ -191,7 +186,7 @@ var exportEnvironmentsAction = action.Action{
 	Name: "export-environments",
 	Forward: func(ctx action.FWContext) (action.Result, error) {
 		app := ctx.Params[0].(*App)
-		app, err := GetByName(app.Name)
+		app, err := GetByName(ctx.Context, app.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -212,7 +207,7 @@ var exportEnvironmentsAction = action.Action{
 	},
 	Backward: func(ctx action.BWContext) {
 		app := ctx.Params[0].(*App)
-		app, err := GetByName(app.Name)
+		app, err := GetByName(ctx.Context, app.Name)
 		if err == nil {
 			vars := []string{"TSURU_APPNAME", "TSURU_APPDIR", "TSURU_APP_TOKEN"}
 			app.UnsetEnvs(bind.UnsetEnvArgs{
@@ -260,7 +255,7 @@ var createRepository = action.Action{
 			userNames[i] = users[i].Email
 		}
 		manager := repository.Manager()
-		err = manager.CreateRepository(app.Name, userNames)
+		err = manager.CreateRepository(ctx.Context, app.Name, userNames)
 		if err != nil {
 			return nil, err
 		}
@@ -268,20 +263,20 @@ var createRepository = action.Action{
 	},
 	Backward: func(ctx action.BWContext) {
 		app := ctx.FWResult.(*App)
-		repository.Manager().RemoveRepository(app.Name)
+		repository.Manager().RemoveRepository(ctx.Context, app.Name)
 	},
 	MinParams: 1,
 }
 
-func removeAllRoutersBackend(app *App) error {
+func removeAllRoutersBackend(ctx context.Context, app *App) error {
 	multi := tsuruErrors.NewMultiError()
 	for _, appRouter := range app.GetRouters() {
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(ctx, appRouter.Name)
 		if err != nil {
 			multi.Add(err)
 			continue
 		}
-		err = r.RemoveBackend(app.GetName())
+		err = r.RemoveBackend(ctx, app.GetName())
 		if err != nil && err != router.ErrBackendNotFound {
 			multi.Add(err)
 		}
@@ -292,6 +287,7 @@ func removeAllRoutersBackend(app *App) error {
 var addRouterBackend = action.Action{
 	Name: "add-router-backend",
 	Forward: func(ctx action.FWContext) (result action.Result, err error) {
+		stdCtx := ctx.Context
 		var app *App
 		switch ctx.Params[0].(type) {
 		case *App:
@@ -301,18 +297,18 @@ var addRouterBackend = action.Action{
 		}
 		defer func() {
 			if err != nil {
-				removeAllRoutersBackend(app)
+				removeAllRoutersBackend(stdCtx, app)
 			}
 		}()
 		for _, appRouter := range app.GetRouters() {
-			r, err := router.Get(appRouter.Name)
+			r, err := router.Get(stdCtx, appRouter.Name)
 			if err != nil {
 				return nil, err
 			}
 			if optsRouter, ok := r.(router.OptsRouter); ok {
-				err = optsRouter.AddBackendOpts(app, appRouter.Opts)
+				err = optsRouter.AddBackendOpts(ctx.Context, app, appRouter.Opts)
 			} else {
-				err = r.AddBackend(app)
+				err = r.AddBackend(ctx.Context, app)
 			}
 			if err != nil {
 				return nil, err
@@ -322,7 +318,7 @@ var addRouterBackend = action.Action{
 	},
 	Backward: func(ctx action.BWContext) {
 		app := ctx.FWResult.(*App)
-		err := removeAllRoutersBackend(app)
+		err := removeAllRoutersBackend(ctx.Context, app)
 		if err != nil {
 			log.Errorf("[add-router-backend rollback] unable to remove all routers backends: %s", err)
 		}
@@ -344,7 +340,7 @@ var provisionApp = action.Action{
 		if err != nil {
 			return nil, err
 		}
-		err = prov.Provision(app)
+		err = prov.Provision(ctx.Context, app)
 		if err != nil {
 			return nil, err
 		}
@@ -354,7 +350,7 @@ var provisionApp = action.Action{
 		app := ctx.FWResult.(*App)
 		prov, err := app.getProvisioner()
 		if err == nil {
-			prov.Destroy(app)
+			prov.Destroy(ctx.Context, app)
 		}
 	},
 	MinParams: 1,
@@ -384,11 +380,11 @@ var reserveUnitsToAdd = action.Action{
 			return nil, err
 		}
 		defer conn.Close()
-		app, err = GetByName(app.Name)
+		app, err = GetByName(ctx.Context, app.Name)
 		if err != nil {
 			return nil, appTypes.ErrAppNotFound
 		}
-		err = servicemanager.AppQuota.Inc(app.Name, n)
+		err = servicemanager.AppQuota.Inc(ctx.Context, app, n)
 		if err != nil {
 			return nil, err
 		}
@@ -401,7 +397,7 @@ var reserveUnitsToAdd = action.Action{
 			app = ctx.Params[0].(*App)
 		}
 		qty := ctx.FWResult.(int)
-		err := servicemanager.AppQuota.Inc(app.Name, -qty)
+		err := servicemanager.AppQuota.Inc(ctx.Context, app, -qty)
 		if err != nil {
 			log.Errorf("Failed to rollback reserveUnitsToAdd: %s", err)
 		}
@@ -427,7 +423,7 @@ var provisionAddUnits = action.Action{
 		if err != nil {
 			return nil, err
 		}
-		return nil, prov.AddUnits(app, uint(n), process, version, w)
+		return nil, prov.AddUnits(ctx.Context, app, uint(n), process, version, w)
 	},
 	MinParams: 1,
 }
@@ -469,12 +465,12 @@ var restartApp = action.Action{
 			return nil, errors.New("expected app ptr as first arg")
 		}
 		w, _ := ctx.Params[2].(io.Writer)
-		return nil, app.Restart("", "", w)
+		return nil, app.Restart(ctx.Context, "", "", w)
 	},
 	Backward: func(ctx action.BWContext) {
 		oldApp := ctx.Params[1].(*App)
 		w, _ := ctx.Params[2].(io.Writer)
-		err := oldApp.Restart("", "", w)
+		err := oldApp.Restart(ctx.Context, "", "", w)
 		if err != nil {
 			log.Errorf("BACKWARD update app - failed to restart app: %s", err)
 		}
@@ -492,7 +488,7 @@ var provisionAppNewProvisioner = action.Action{
 		if err != nil {
 			return nil, err
 		}
-		return nil, prov.Provision(app)
+		return nil, prov.Provision(ctx.Context, app)
 	},
 	Backward: func(ctx action.BWContext) {
 		app := ctx.Params[0].(*App)
@@ -500,7 +496,7 @@ var provisionAppNewProvisioner = action.Action{
 		if err != nil {
 			log.Errorf("BACKWARD provision app - failed to get provisioner: %s", err)
 		}
-		err = prov.Destroy(app)
+		err = prov.Destroy(ctx.Context, app)
 		if err != nil {
 			log.Errorf("BACKWARD provision app - failed to destroy app in prov: %s", err)
 		}
@@ -542,7 +538,7 @@ var provisionAppAddUnits = action.Action{
 			app.Routers = routers
 			app.Router = router
 			if err == nil {
-				_, err = rebuild.RebuildRoutes(app, false)
+				_, err = rebuild.RebuildRoutes(ctx.Context, app, false)
 			}
 		}()
 		for processData, count := range unitCount {
@@ -574,7 +570,7 @@ var destroyAppOldProvisioner = action.Action{
 		if err != nil {
 			return nil, err
 		}
-		return nil, oldProv.Destroy(oldApp)
+		return nil, oldProv.Destroy(ctx.Context, oldApp)
 	},
 }
 
@@ -595,7 +591,7 @@ var updateAppProvisioner = action.Action{
 		}
 		w, _ := ctx.Params[2].(io.Writer)
 		if upProv, ok := oldProv.(provision.UpdatableProvisioner); ok {
-			return nil, upProv.UpdateApp(oldApp, app, w)
+			return nil, upProv.UpdateApp(ctx.Context, oldApp, app, w)
 		}
 		return nil, nil
 	},
@@ -609,7 +605,7 @@ var updateAppProvisioner = action.Action{
 		}
 		w := ctx.Params[2].(io.Writer)
 		if upProv, ok := newProv.(provision.UpdatableProvisioner); ok {
-			if err := upProv.UpdateApp(app, oldApp, w); err != nil {
+			if err := upProv.UpdateApp(ctx.Context, app, oldApp, w); err != nil {
 				log.Errorf("BACKWARDS update-app-provisioner - failed to update app back to previous state: %v", err)
 			}
 		}
@@ -642,10 +638,10 @@ var validateNewCNames = action.Action{
 	},
 }
 
-func setUnsetCnames(app *App, cnames []string, toSet bool) error {
+func setUnsetCnames(ctx context.Context, app *App, cnames []string, toSet bool) error {
 	multi := tsuruErrors.NewMultiError()
 	for _, appRouter := range app.GetRouters() {
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(ctx, appRouter.Name)
 		if err != nil {
 			multi.Add(err)
 			continue
@@ -656,12 +652,12 @@ func setUnsetCnames(app *App, cnames []string, toSet bool) error {
 		}
 		for _, c := range cnames {
 			if toSet {
-				err = cnameRouter.SetCName(c, app.Name)
+				err = cnameRouter.SetCName(ctx, c, app.Name)
 				if err == router.ErrCNameExists {
 					err = nil
 				}
 			} else {
-				err = cnameRouter.UnsetCName(c, app.Name)
+				err = cnameRouter.UnsetCName(ctx, c, app.Name)
 				if err == router.ErrCNameNotFound {
 					err = nil
 				}
@@ -677,16 +673,17 @@ func setUnsetCnames(app *App, cnames []string, toSet bool) error {
 var setNewCNamesToProvisioner = action.Action{
 	Name: "set-new-cnames-to-provisioner",
 	Forward: func(ctx action.FWContext) (result action.Result, err error) {
+		stdCtx := ctx.Context
 		app := ctx.Params[0].(*App)
 		cnames := ctx.Params[1].([]string)
 		defer func() {
 			if err != nil {
-				setUnsetCnames(app, cnames, false)
+				setUnsetCnames(stdCtx, app, cnames, false)
 			}
 		}()
 		for _, appRouter := range app.GetRouters() {
 			var r router.Router
-			r, err = router.Get(appRouter.Name)
+			r, err = router.Get(stdCtx, appRouter.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -695,7 +692,7 @@ var setNewCNamesToProvisioner = action.Action{
 				continue
 			}
 			for _, cname := range cnames {
-				err = cnameRouter.SetCName(cname, app.Name)
+				err = cnameRouter.SetCName(ctx.Context, cname, app.Name)
 				if err != nil {
 					return nil, err
 				}
@@ -706,7 +703,7 @@ var setNewCNamesToProvisioner = action.Action{
 	Backward: func(ctx action.BWContext) {
 		cnames := ctx.Params[1].([]string)
 		app := ctx.Params[0].(*App)
-		err := setUnsetCnames(app, cnames, false)
+		err := setUnsetCnames(ctx.Context, app, cnames, false)
 		if err != nil {
 			log.Errorf("BACKWARD set cnames - unable to remove cnames from routers: %s", err)
 		}
@@ -798,16 +795,17 @@ var checkCNameExists = action.Action{
 var unsetCNameFromProvisioner = action.Action{
 	Name: "unset-cname-from-provisioner",
 	Forward: func(ctx action.FWContext) (result action.Result, err error) {
+		stdCtx := ctx.Context
 		app := ctx.Params[0].(*App)
 		cnames := ctx.Params[1].([]string)
 		defer func() {
 			if err != nil {
-				setUnsetCnames(app, cnames, true)
+				setUnsetCnames(stdCtx, app, cnames, true)
 			}
 		}()
 		for _, appRouter := range app.GetRouters() {
 			var r router.Router
-			r, err = router.Get(appRouter.Name)
+			r, err = router.Get(stdCtx, appRouter.Name)
 			if err != nil {
 				return nil, err
 			}
@@ -816,7 +814,7 @@ var unsetCNameFromProvisioner = action.Action{
 				continue
 			}
 			for _, cname := range cnames {
-				err = cnameRouter.UnsetCName(cname, app.Name)
+				err = cnameRouter.UnsetCName(ctx.Context, cname, app.Name)
 				if err != nil {
 					return nil, err
 				}
@@ -827,7 +825,7 @@ var unsetCNameFromProvisioner = action.Action{
 	Backward: func(ctx action.BWContext) {
 		cnames := ctx.Params[1].([]string)
 		app := ctx.Params[0].(*App)
-		err := setUnsetCnames(app, cnames, true)
+		err := setUnsetCnames(ctx.Context, app, cnames, true)
 		if err != nil {
 			log.Errorf("BACKWARD unset cname - unable to set cnames in routers: %s", err)
 		}

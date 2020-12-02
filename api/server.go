@@ -11,6 +11,7 @@ import (
 	"fmt"
 	stdLog "log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -19,9 +20,12 @@ import (
 	"time"
 
 	"github.com/codegangsta/negroni"
+	"github.com/felixge/fgprof"
+	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tsuru/config"
+	"github.com/tsuru/tsuru/api/observability"
 	apiRouter "github.com/tsuru/tsuru/api/router"
 	"github.com/tsuru/tsuru/api/shutdown"
 	"github.com/tsuru/tsuru/api/tracker"
@@ -45,6 +49,7 @@ import (
 	"github.com/tsuru/tsuru/provision"
 	"github.com/tsuru/tsuru/provision/cluster"
 	"github.com/tsuru/tsuru/provision/nodecontainer"
+	"github.com/tsuru/tsuru/provision/pool"
 	"github.com/tsuru/tsuru/router"
 	"github.com/tsuru/tsuru/router/rebuild"
 	"github.com/tsuru/tsuru/service"
@@ -54,7 +59,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-const Version = "1.8.0-rc4"
+const Version = "1.8.1-rc1"
 
 type TsuruHandler struct {
 	version string
@@ -97,6 +102,10 @@ var onceServices sync.Once
 
 func setupServices() error {
 	var err error
+	servicemanager.App, err = app.AppService()
+	if err != nil {
+		return err
+	}
 	servicemanager.TeamToken, err = auth.TeamTokenService()
 	if err != nil {
 		return err
@@ -153,8 +162,23 @@ func setupServices() error {
 	if err != nil {
 		return err
 	}
+	servicemanager.DynamicRouter, err = router.DynamicRouterService()
+	if err != nil {
+		return err
+	}
 	servicemanager.AppVersion, err = version.AppVersionService()
-	return err
+	if err != nil {
+		return err
+	}
+	servicemanager.AuthGroup, err = auth.GroupService()
+	if err != nil {
+		return err
+	}
+	servicemanager.Pool, err = pool.PoolService()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func InitializeDBServices() error {
@@ -237,6 +261,8 @@ func RunServer(dry bool) http.Handler {
 	m.Add("1.0", "Get", "/apps", AuthorizationRequiredHandler(appList))
 	m.Add("1.0", "Post", "/apps", AuthorizationRequiredHandler(createApp))
 	m.Add("1.0", "Delete", "/apps/{app}/lock", AuthorizationRequiredHandler(forceDeleteLock))
+	m.Add("1.9", "Post", "/apps/{app}/units/autoscale", AuthorizationRequiredHandler(addAutoScaleUnits))
+	m.Add("1.9", "Delete", "/apps/{app}/units/autoscale", AuthorizationRequiredHandler(removeAutoScaleUnits))
 	m.Add("1.0", "Put", "/apps/{app}/units", AuthorizationRequiredHandler(addUnits))
 	m.Add("1.0", "Delete", "/apps/{app}/units", AuthorizationRequiredHandler(removeUnits))
 	registerUnitHandler := AuthorizationRequiredHandler(registerUnit)
@@ -375,17 +401,20 @@ func RunServer(dry bool) http.Handler {
 	m.Add("1.0", "Get", "/permissions", AuthorizationRequiredHandler(listPermissions))
 	m.Add("1.6", "Post", "/roles/{name}/token", AuthorizationRequiredHandler(assignRoleToToken))
 	m.Add("1.6", "Delete", "/roles/{name}/token/{token_id}", AuthorizationRequiredHandler(dissociateRoleFromToken))
+	m.Add("1.9", "Post", "/roles/{name}/group", AuthorizationRequiredHandler(assignRoleToGroup))
+	m.Add("1.9", "Delete", "/roles/{name}/group/{group_name}", AuthorizationRequiredHandler(dissociateRoleFromGroup))
 
 	m.Add("1.0", "Get", "/debug/goroutines", AuthorizationRequiredHandler(dumpGoroutines))
-	m.Add("1.0", "Get", "/debug/pprof/", AuthorizationRequiredHandler(indexHandler))
-	m.Add("1.0", "Get", "/debug/pprof/cmdline", AuthorizationRequiredHandler(cmdlineHandler))
-	m.Add("1.0", "Get", "/debug/pprof/profile", AuthorizationRequiredHandler(profileHandler))
-	m.Add("1.0", "Get", "/debug/pprof/symbol", AuthorizationRequiredHandler(symbolHandler))
-	m.Add("1.0", "Get", "/debug/pprof/heap", AuthorizationRequiredHandler(indexHandler))
-	m.Add("1.0", "Get", "/debug/pprof/goroutine", AuthorizationRequiredHandler(indexHandler))
-	m.Add("1.0", "Get", "/debug/pprof/threadcreate", AuthorizationRequiredHandler(indexHandler))
-	m.Add("1.0", "Get", "/debug/pprof/block", AuthorizationRequiredHandler(indexHandler))
-	m.Add("1.0", "Get", "/debug/pprof/trace", AuthorizationRequiredHandler(traceHandler))
+	m.Add("1.0", "Get", "/debug/pprof/", AuthorizationRequiredHandler(debugHandler(pprof.Index)))
+	m.Add("1.0", "Get", "/debug/pprof/cmdline", AuthorizationRequiredHandler(debugHandler(pprof.Cmdline)))
+	m.Add("1.0", "Get", "/debug/pprof/profile", AuthorizationRequiredHandler(debugHandler(pprof.Profile)))
+	m.Add("1.0", "Get", "/debug/pprof/symbol", AuthorizationRequiredHandler(debugHandler(pprof.Symbol)))
+	m.Add("1.0", "Get", "/debug/pprof/heap", AuthorizationRequiredHandler(debugHandler(pprof.Index)))
+	m.Add("1.0", "Get", "/debug/pprof/goroutine", AuthorizationRequiredHandler(debugHandler(pprof.Index)))
+	m.Add("1.0", "Get", "/debug/pprof/threadcreate", AuthorizationRequiredHandler(debugHandler(pprof.Index)))
+	m.Add("1.0", "Get", "/debug/pprof/block", AuthorizationRequiredHandler(debugHandler(pprof.Index)))
+	m.Add("1.0", "Get", "/debug/pprof/trace", AuthorizationRequiredHandler(debugHandler(pprof.Trace)))
+	m.Add("1.9", "Get", "/debug/fgprof", AuthorizationRequiredHandler(debugHandlerInt(fgprof.Handler())))
 
 	m.Add("1.3", "GET", "/node/autoscale", AuthorizationRequiredHandler(autoScaleHistoryHandler))
 	m.Add("1.3", "GET", "/node/autoscale/config", AuthorizationRequiredHandler(autoScaleGetConfig))
@@ -420,6 +449,10 @@ func RunServer(dry bool) http.Handler {
 	m.Add("1.2", "DELETE", "/healing/node", AuthorizationRequiredHandler(nodeHealingDelete))
 	m.Add("1.3", "GET", "/healing", AuthorizationRequiredHandler(healingHistoryHandler))
 	m.Add("1.3", "GET", "/routers", AuthorizationRequiredHandler(listRouters))
+	m.Add("1.8", "POST", "/routers", AuthorizationRequiredHandler(addRouter))
+	m.Add("1.8", "PUT", "/routers/{name}", AuthorizationRequiredHandler(updateRouter))
+	m.Add("1.8", "DELETE", "/routers/{name}", AuthorizationRequiredHandler(deleteRouter))
+
 	m.Add("1.2", "GET", "/metrics", promhttp.Handler())
 
 	m.Add("1.7", "GET", "/provisioner", AuthorizationRequiredHandler(provisionerList))
@@ -484,8 +517,9 @@ func RunServer(dry bool) http.Handler {
 	n := negroni.New()
 	n.Use(negroni.NewRecovery())
 	n.Use(negroni.HandlerFunc(contextClearerMiddleware))
+	n.Use(negroni.HandlerFunc(contextNoCancelMiddleware))
 	if !dry {
-		n.Use(newLoggerMiddleware())
+		n.Use(observability.NewMiddleware())
 	}
 	n.UseHandler(m)
 	n.Use(&flushingWriterMiddleware{
@@ -538,7 +572,7 @@ func setupDatabase() error {
 }
 
 func appFinder(appName string) (rebuild.RebuildApp, error) {
-	a, err := app.GetByName(appName)
+	a, err := app.GetByName(context.TODO(), appName)
 	if err == appTypes.ErrAppNotFound {
 		return nil, nil
 	}
@@ -546,7 +580,7 @@ func appFinder(appName string) (rebuild.RebuildApp, error) {
 }
 
 func bindAppsLister() ([]bind.App, error) {
-	apps, err := app.List(nil)
+	apps, err := app.List(context.TODO(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -558,6 +592,10 @@ func bindAppsLister() ([]bind.App, error) {
 }
 
 func startServer(handler http.Handler) error {
+	span, ctx := opentracing.StartSpanFromContext(
+		context.Background(), "StartServer")
+	defer span.Finish()
+
 	srvConf, err := createServers(handler)
 	if err != nil {
 		return err
@@ -577,13 +615,13 @@ func startServer(handler http.Handler) error {
 	if err != nil {
 		return err
 	}
-	routers, err := router.List()
+	routers, err := router.List(ctx)
 	if err != nil {
 		return err
 	}
 	for _, routerDesc := range routers {
 		var r router.Router
-		r, err = router.Get(routerDesc.Name)
+		r, err = router.Get(ctx, routerDesc.Name)
 		if err != nil {
 			return err
 		}
@@ -596,7 +634,7 @@ func startServer(handler http.Handler) error {
 		}
 		fmt.Println()
 	}
-	defaultRouter, _ := router.Default()
+	defaultRouter, _ := router.Default(ctx)
 	fmt.Printf("Default router is %q.\n", defaultRouter)
 	repoManager, err := config.GetString("repo-manager")
 	if err != nil {
@@ -617,7 +655,7 @@ func startServer(handler http.Handler) error {
 		return err
 	}
 	fmt.Printf("Using %q auth scheme.\n", scheme)
-	_, err = nodecontainer.InitializeBS(app.AuthScheme, app.InternalAppName)
+	_, err = nodecontainer.InitializeBS(ctx, app.AuthScheme, app.InternalAppName)
 	if err != nil {
 		return err
 	}
@@ -646,7 +684,7 @@ func startServer(handler http.Handler) error {
 		return err
 	}
 	fmt.Println("Checking components status:")
-	results := hc.Check("all")
+	results := hc.Check(ctx, "all")
 	for _, result := range results {
 		if result.Status != hc.HealthCheckOK {
 			fmt.Printf("    WARNING: %q is not working: %s\n", result.Name, result.Status)

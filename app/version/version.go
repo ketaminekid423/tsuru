@@ -5,6 +5,7 @@
 package version
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -15,10 +16,13 @@ import (
 )
 
 type appVersionImpl struct {
+	ctx         context.Context
 	storage     appTypes.AppVersionStorage
 	app         appTypes.App
 	versionInfo *appTypes.AppVersionInfo
 }
+
+var _ appTypes.AppVersion = &appVersionImpl{}
 
 func (v *appVersionImpl) BuildImageName() string {
 	return image.AppBuildImageName(v.app.GetName(), v.versionInfo.CustomBuildTag, v.app.GetTeamOwner(), v.Version())
@@ -30,7 +34,7 @@ func (v *appVersionImpl) CommitBuildImage() error {
 		return err
 	}
 	v.versionInfo.BuildImage = v.BuildImageName()
-	return v.storage.UpdateVersion(v.app.GetName(), v.versionInfo)
+	return v.storage.UpdateVersion(v.ctx, v.app.GetName(), v.versionInfo)
 }
 
 func (v *appVersionImpl) BaseImageName() string {
@@ -43,7 +47,7 @@ func (v *appVersionImpl) CommitBaseImage() error {
 		return err
 	}
 	v.versionInfo.DeployImage = v.BaseImageName()
-	return v.storage.UpdateVersion(v.app.GetName(), v.versionInfo)
+	return v.storage.UpdateVersion(v.ctx, v.app.GetName(), v.versionInfo)
 }
 
 func (v *appVersionImpl) VersionInfo() appTypes.AppVersionInfo {
@@ -91,7 +95,16 @@ func (v *appVersionImpl) CommitSuccessful() error {
 		return err
 	}
 	v.versionInfo.DeploySuccessful = true
-	return v.storage.UpdateVersionSuccess(v.app.GetName(), v.versionInfo)
+	return v.storage.UpdateVersionSuccess(v.ctx, v.app.GetName(), v.versionInfo)
+}
+
+func (v *appVersionImpl) MarkToRemoval() error {
+	err := v.refresh()
+	if err != nil {
+		return err
+	}
+	v.versionInfo.MarkedToRemoval = true
+	return v.storage.UpdateVersion(v.ctx, v.app.GetName(), v.versionInfo)
 }
 
 func (v *appVersionImpl) AddData(args appTypes.AddVersionDataArgs) error {
@@ -117,7 +130,7 @@ func (v *appVersionImpl) AddData(args appTypes.AddVersionDataArgs) error {
 	if args.ExposedPorts != nil {
 		v.versionInfo.ExposedPorts = args.ExposedPorts
 	}
-	return v.storage.UpdateVersion(v.app.GetName(), v.versionInfo)
+	return v.storage.UpdateVersion(v.ctx, v.app.GetName(), v.versionInfo)
 }
 
 func (v *appVersionImpl) ToggleEnabled(enabled bool, reason string) error {
@@ -127,7 +140,7 @@ func (v *appVersionImpl) ToggleEnabled(enabled bool, reason string) error {
 	}
 	v.versionInfo.Disabled = !enabled
 	v.versionInfo.DisabledReason = reason
-	return v.storage.UpdateVersion(v.app.GetName(), v.versionInfo)
+	return v.storage.UpdateVersion(v.ctx, v.app.GetName(), v.versionInfo)
 }
 
 func (v *appVersionImpl) Version() int {
@@ -139,7 +152,7 @@ func (v *appVersionImpl) String() string {
 }
 
 func (v *appVersionImpl) refresh() error {
-	versions, err := v.storage.AppVersions(v.app)
+	versions, err := v.storage.AppVersions(v.ctx, v.app)
 	if err != nil {
 		return err
 	}

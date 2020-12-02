@@ -5,6 +5,7 @@
 package applog
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/set"
 	appTypes "github.com/tsuru/tsuru/types/app"
@@ -22,42 +24,45 @@ const (
 	watchBufferSize         = 1000
 	watchWarningInterval    = 30 * time.Second
 	baseLogSize             = unsafe.Sizeof(appTypes.Applog{}) + unsafe.Sizeof(ringEntry{})
+	logMemorySubsytem       = "logs_memory"
 )
 
 var (
-	logsMemoryReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "tsuru_logs_memory_received_total",
-		Help: "The number of in memory log entries received for processing.",
+	logsMemoryReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: promNamespace,
+		Subsystem: logMemorySubsytem,
+		Name:      "received_total",
+		Help:      "The number of in memory log entries received for processing.",
 	}, []string{"app"})
 
-	logsMemoryEvicted = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "tsuru_logs_memory_evicted_total",
-		Help: "The number of in memory log entries removed due to full buffer.",
+	logsMemoryEvicted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: promNamespace,
+		Subsystem: logMemorySubsytem,
+		Name:      "evicted_total",
+		Help:      "The number of in memory log entries removed due to full buffer.",
 	}, []string{"app"})
 
-	logsMemoryDroppedWatch = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "tsuru_logs_memory_watch_dropped_total",
-		Help: "The number of messages dropped in watchers due to a slow client.",
+	logsMemoryDroppedWatch = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: promNamespace,
+		Subsystem: logMemorySubsytem,
+		Name:      "watch_dropped_total",
+		Help:      "The number of messages dropped in watchers due to a slow client.",
 	}, []string{"app"})
 
-	logsMemorySize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "tsuru_logs_memory_size",
-		Help: "The size in bytes for in memory log entries of a given app.",
+	logsMemorySize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: promNamespace,
+		Subsystem: logMemorySubsytem,
+		Name:      "size",
+		Help:      "The size in bytes for in memory log entries of a given app.",
 	}, []string{"app"})
 
-	logsMemoryLength = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "tsuru_logs_memory_length",
-		Help: "The number of in memory log entries for a given app.",
+	logsMemoryLength = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: promNamespace,
+		Subsystem: logMemorySubsytem,
+		Name:      "length",
+		Help:      "The number of in memory log entries for a given app.",
 	}, []string{"app"})
 )
-
-func init() {
-	prometheus.MustRegister(logsMemoryReceived)
-	prometheus.MustRegister(logsMemoryEvicted)
-	prometheus.MustRegister(logsMemoryDroppedWatch)
-	prometheus.MustRegister(logsMemorySize)
-	prometheus.MustRegister(logsMemoryLength)
-}
 
 type memoryLogService struct {
 	bufferMap sync.Map
@@ -100,7 +105,7 @@ func (s *memoryLogService) Add(appName, message, source, unit string) error {
 	return nil
 }
 
-func (s *memoryLogService) List(args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
+func (s *memoryLogService) List(ctx context.Context, args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
 	if args.AppName == "" {
 		return nil, errors.New("app name required to list logs")
 	}
@@ -108,31 +113,10 @@ func (s *memoryLogService) List(args appTypes.ListLogArgs) ([]appTypes.Applog, e
 		return []appTypes.Applog{}, nil
 	}
 	buffer := s.getAppBuffer(args.AppName)
-	if buffer.length == 0 {
-		return []appTypes.Applog{}, nil
-	}
-	if args.Limit == 0 || buffer.length < args.Limit {
-		args.Limit = buffer.length
-	}
-	logs := make([]appTypes.Applog, args.Limit)
-	var count int
-	unitsSet := set.FromSlice(args.Units)
-	for current := buffer.end; count < args.Limit; {
-		if (args.Source == "" || (args.Source == current.log.Source) != args.InvertSource) &&
-			(len(args.Units) == 0 || unitsSet.Includes(current.log.Unit)) {
-
-			logs[len(logs)-count-1] = *current.log
-			count++
-		}
-		current = current.prev
-		if current == buffer.end {
-			break
-		}
-	}
-	return logs[len(logs)-count:], nil
+	return buffer.list(args), nil
 }
 
-func (s *memoryLogService) Watch(args appTypes.ListLogArgs) (appTypes.LogWatcher, error) {
+func (s *memoryLogService) Watch(ctx context.Context, args appTypes.ListLogArgs) (appTypes.LogWatcher, error) {
 	buffer := s.getAppBuffer(args.AppName)
 	watcher := &memoryWatcher{
 		buffer:     buffer,
@@ -181,7 +165,7 @@ type ringEntry struct {
 }
 
 type appLogBuffer struct {
-	mu              sync.Mutex
+	mu              sync.RWMutex
 	appName         string
 	size            uint
 	length          int
@@ -193,6 +177,33 @@ type appLogBuffer struct {
 	droppedCounter  prometheus.Counter
 	sizeGauge       prometheus.Gauge
 	lengthGauge     prometheus.Gauge
+}
+
+func (b *appLogBuffer) list(args appTypes.ListLogArgs) []appTypes.Applog {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.length == 0 {
+		return []appTypes.Applog{}
+	}
+	if args.Limit == 0 || b.length < args.Limit {
+		args.Limit = b.length
+	}
+	logs := make([]appTypes.Applog, args.Limit)
+	var count int
+	unitsSet := set.FromSlice(args.Units)
+	for current := b.end; count < args.Limit; {
+		if (args.Source == "" || (args.Source == current.log.Source) != args.InvertSource) &&
+			(len(args.Units) == 0 || unitsSet.Includes(current.log.Unit)) {
+
+			logs[len(logs)-count-1] = *current.log
+			count++
+		}
+		current = current.prev
+		if current == b.end {
+			break
+		}
+	}
+	return logs[len(logs)-count:]
 }
 
 func (b *appLogBuffer) add(entry *appTypes.Applog) {

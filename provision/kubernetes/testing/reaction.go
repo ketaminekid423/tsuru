@@ -6,6 +6,8 @@ package testing
 
 import (
 	"bufio"
+	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"net/url"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +30,7 @@ import (
 	tsuruv1client "github.com/tsuru/tsuru/provision/kubernetes/pkg/client/clientset/versioned/typed/tsuru/v1"
 	"github.com/tsuru/tsuru/provision/provisiontest"
 	_ "github.com/tsuru/tsuru/storage/mongodb"
+	appTypes "github.com/tsuru/tsuru/types/app"
 	provTypes "github.com/tsuru/tsuru/types/provision"
 	check "gopkg.in/check.v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -42,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/httpstream/spdy"
 	informers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
+	kscheme "k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
@@ -54,7 +59,7 @@ const (
 type ClusterInterface interface {
 	CoreV1() v1core.CoreV1Interface
 	RestConfig() *rest.Config
-	AppNamespace(provision.App) (string, error)
+	AppNamespace(appTypes.App) (string, error)
 	PoolNamespace(string) string
 	Namespace() string
 	GetCluster() *provTypes.Cluster
@@ -119,6 +124,11 @@ type clientPodsWrapper struct {
 	cluster ClusterInterface
 }
 
+func (c *clientPodsWrapper) GetLogs(name string, opts *apiv1.PodLogOptions) *rest.Request {
+	cli, _ := rest.RESTClientFor(c.cluster.RestConfig())
+	return cli.Get().Namespace(c.cluster.Namespace()).Name(name).Resource("pods").SubResource("log").VersionedParams(opts, kscheme.ParameterCodec)
+}
+
 type StreamResult struct {
 	Stdin  string
 	Resize string
@@ -127,7 +137,7 @@ type StreamResult struct {
 
 func (s *KubeMock) DefaultReactions(c *check.C) (*provisiontest.FakeApp, func(), func()) {
 	a := provisiontest.NewFakeApp("myapp", "python", 0)
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	a.Deploys = 1
 	podReaction, deployPodReady := s.deployPodReaction(a, c)
@@ -156,7 +166,7 @@ func (s *KubeMock) DefaultReactions(c *check.C) (*provisiontest.FakeApp, func(),
 
 func (s *KubeMock) NoNodeReactions(c *check.C) (*provisiontest.FakeApp, func(), func()) {
 	a := provisiontest.NewFakeApp("myapp", "python", 0)
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	a.Deploys = 1
 	podReaction, deployPodReady := s.deployPodReaction(a, c)
@@ -352,7 +362,7 @@ func SortNodes(nodes []*apiv1.Node) {
 }
 
 func (s *KubeMock) WaitNodeUpdate(c *check.C, fn func()) {
-	nodes, err := s.p.(provision.NodeProvisioner).ListNodes(nil)
+	nodes, err := s.p.(provision.NodeProvisioner).ListNodes(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	var rawNodes []*apiv1.Node
 	for _, n := range nodes {
@@ -361,7 +371,7 @@ func (s *KubeMock) WaitNodeUpdate(c *check.C, fn func()) {
 	fn()
 	timeout := time.After(5 * time.Second)
 	for {
-		nodes, err = s.p.(provision.NodeProvisioner).ListNodes(nil)
+		nodes, err = s.p.(provision.NodeProvisioner).ListNodes(context.TODO(), nil)
 		c.Assert(err, check.IsNil)
 		var rawNodesAfter []*apiv1.Node
 		for _, n := range nodes {
@@ -470,9 +480,6 @@ func (s *KubeMock) deployPodReaction(a provision.App, c *check.C) (ktesting.Reac
 			c.Assert(pod.ObjectMeta.Labels["tsuru.io/app-pool"], check.Equals, a.GetPool())
 		}
 		c.Assert(pod.ObjectMeta.Labels["tsuru.io/provisioner"], check.Equals, "kubernetes")
-		c.Assert(pod.ObjectMeta.Annotations, check.NotNil)
-		c.Assert(pod.ObjectMeta.Annotations["tsuru.io/router-type"], check.Equals, "fake")
-		c.Assert(pod.ObjectMeta.Annotations["tsuru.io/router-name"], check.Equals, "fake")
 		if !strings.HasSuffix(pod.Name, "-deploy") {
 			return false, nil, nil
 		}
@@ -491,7 +498,7 @@ func (s *KubeMock) deployPodReaction(a provision.App, c *check.C) (ktesting.Reac
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := s.p.RegisterUnit(a, pod.Name, map[string]interface{}{
+				err := s.p.RegisterUnit(context.TODO(), a, pod.Name, map[string]interface{}{
 					"processes": map[string]interface{}{
 						"web":    "python myapp.py",
 						"worker": "python myworker.py",
@@ -571,6 +578,9 @@ func (s *KubeMock) deploymentWithPodReaction(c *check.C) (ktesting.ReactionFunc,
 			return false, nil, nil
 		}
 		dep := action.(ktesting.CreateAction).GetObject().(*appsv1.Deployment)
+		if dep.Annotations == nil {
+			dep.Annotations = make(map[string]string)
+		}
 		var specReplicas int32
 		if dep.Spec.Replicas != nil {
 			specReplicas = *dep.Spec.Replicas
@@ -583,12 +593,19 @@ func (s *KubeMock) deploymentWithPodReaction(c *check.C) (ktesting.ReactionFunc,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
+			var revision int
+			if dep.Annotations["deployment.kubernetes.io/revision"] != "" {
+				revision, _ = strconv.Atoi(dep.Annotations["deployment.kubernetes.io/revision"])
+			}
+			revision++
+
 			rs := &appsv1.ReplicaSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        dep.Name + "-1",
 					Namespace:   dep.Namespace,
 					Labels:      dep.Labels,
-					Annotations: dep.Annotations,
+					Annotations: map[string]string{},
 				},
 				Spec: appsv1.ReplicaSetSpec{
 					Replicas: dep.Spec.Replicas,
@@ -596,13 +613,19 @@ func (s *KubeMock) deploymentWithPodReaction(c *check.C) (ktesting.ReactionFunc,
 					Template: *dep.Spec.Template.DeepCopy(),
 				},
 			}
+
+			for k, v := range dep.Annotations {
+				rs.Annotations[k] = v
+			}
+			rs.ObjectMeta.Annotations["deployment.kubernetes.io/revision"] = fmt.Sprintf("%d", revision)
 			rs.OwnerReferences = []metav1.OwnerReference{
 				*metav1.NewControllerRef(dep, appsv1.SchemeGroupVersion.WithKind("Deployment")),
 			}
-			_, err := s.client.AppsV1().ReplicaSets(dep.Namespace).Create(rs)
-			_, err = s.client.AppsV1().ReplicaSets(dep.Namespace).Update(rs)
+			rs.ObjectMeta.Name = dep.Name + "-" + shortMD5ForObject(rs.Spec.Template.Spec)
+			_, _ = s.client.AppsV1().ReplicaSets(dep.Namespace).Create(rs)
+			_, err := s.client.AppsV1().ReplicaSets(dep.Namespace).Update(rs)
 			c.Assert(err, check.IsNil)
-			err = s.factory.Apps().V1().ReplicaSets().Informer().GetStore().Add(rs)
+			_ = s.factory.Apps().V1().ReplicaSets().Informer().GetStore().Add(rs)
 			err = s.factory.Apps().V1().ReplicaSets().Informer().GetStore().Update(rs)
 			c.Assert(err, check.IsNil)
 
@@ -650,4 +673,11 @@ func cleanupPods(client ClusterInterface, opts metav1.ListOptions, namespace str
 		}
 	}
 	return nil
+}
+
+func shortMD5ForObject(i interface{}) string {
+	b, _ := json.Marshal(i)
+	m := md5.Sum(b)
+
+	return fmt.Sprintf("%x", m)[0:10]
 }

@@ -79,12 +79,12 @@ const (
 	maxStartRetries = 4
 )
 
-func RunPipelineWithRetry(pipe *action.Pipeline, args interface{}) error {
+func RunPipelineWithRetry(ctx context.Context, pipe *action.Pipeline, args interface{}) error {
 	retryCount := maxStartRetries
 	multi := tsuruErrors.NewMultiError()
 	var err error
 	for ; retryCount >= 0; retryCount-- {
-		err = pipe.Execute(args)
+		err = pipe.Execute(ctx, args)
 		if err == nil {
 			break
 		}
@@ -101,8 +101,8 @@ func RunPipelineWithRetry(pipe *action.Pipeline, args interface{}) error {
 }
 
 func (c *Container) ShortID() string {
-	if len(c.ID) > 10 {
-		return c.ID[:10]
+	if len(c.ID) > 12 {
+		return c.ID[:12]
 	}
 	return c.ID
 }
@@ -153,7 +153,7 @@ func (c *Container) Create(args *CreateArgs) error {
 	if err != nil {
 		return err
 	}
-	labelSet, err := provision.ProcessLabels(provision.ProcessLabelsOpts{
+	labelSet, err := provision.ProcessLabels(context.TODO(), provision.ProcessLabelsOpts{
 		App:         args.App,
 		Process:     c.ProcessName,
 		Provisioner: "docker",

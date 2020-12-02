@@ -9,17 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	stdIO "io"
-	stdLog "log"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ajg/form"
-	"github.com/codegangsta/negroni"
 	uuid "github.com/nu7hatch/gouuid"
+	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/api/context"
@@ -29,6 +27,7 @@ import (
 	tsuruErrors "github.com/tsuru/tsuru/errors"
 	"github.com/tsuru/tsuru/io"
 	"github.com/tsuru/tsuru/log"
+	tsuruNet "github.com/tsuru/tsuru/net"
 	"github.com/tsuru/tsuru/servicemanager"
 	"github.com/tsuru/tsuru/set"
 	appTypes "github.com/tsuru/tsuru/types/app"
@@ -44,24 +43,33 @@ const (
 
 func validate(token string, r *http.Request) (auth.Token, error) {
 	var t auth.Token
-	t, err := app.AuthScheme.Auth(token)
+	t, err := app.AuthScheme.Auth(r.Context(), token)
 	if err != nil {
 		t, err = auth.APIAuth(token)
 		if err != nil {
-			t, err = servicemanager.TeamToken.Authenticate(token)
+			t, err = servicemanager.TeamToken.Authenticate(r.Context(), token)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
+	span := opentracing.SpanFromContext(r.Context())
+
 	if t.IsAppToken() {
-		if q := r.URL.Query().Get(":app"); q != "" && t.GetAppName() != q {
+		tokenAppName := t.GetAppName()
+		if span != nil {
+			span.SetTag("app.name", tokenAppName)
+		}
+		if q := r.URL.Query().Get(":app"); q != "" && tokenAppName != q {
 			return nil, &tsuruErrors.HTTP{
 				Code:    http.StatusForbidden,
 				Message: fmt.Sprintf("app token mismatch, token for %q, request for %q", t.GetAppName(), q),
 			}
 		}
 	} else {
+		if span != nil {
+			span.SetTag("user.name", t.GetUserName())
+		}
 		if q := r.URL.Query().Get(":app"); q != "" {
 			_, err = getAppFromContext(q, r)
 			if err != nil {
@@ -74,6 +82,14 @@ func validate(token string, r *http.Request) (auth.Token, error) {
 
 func contextClearerMiddleware(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
 	defer context.Clear(r)
+	next(w, r)
+}
+
+// contextNoCancelMiddleware replaces the original request context with a
+// non-cancelable context. This allows tsuru to retain its legacy behavior of
+// not canceling an operation on connection failures.
+func contextNoCancelMiddleware(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	r = r.WithContext(tsuruNet.WithoutCancel(r.Context()))
 	next(w, r)
 }
 
@@ -184,40 +200,6 @@ func runDelayedHandler(w http.ResponseWriter, r *http.Request) {
 	if h != nil {
 		h.ServeHTTP(w, r)
 	}
-}
-
-type loggerMiddleware struct {
-	logger *stdLog.Logger
-}
-
-func newLoggerMiddleware() *loggerMiddleware {
-	return &loggerMiddleware{
-		logger: stdLog.New(os.Stdout, "", 0),
-	}
-}
-
-func (l *loggerMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
-	start := time.Now()
-	next(rw, r)
-	duration := time.Since(start)
-	statusCode := rw.(negroni.ResponseWriter).Status()
-	if statusCode == 0 {
-		statusCode = 200
-	}
-	nowFormatted := time.Now().Format(time.RFC3339Nano)
-	requestIDHeader, _ := config.GetString("request-id-header")
-	var requestID string
-	if requestIDHeader != "" {
-		requestID = context.GetRequestID(r, requestIDHeader)
-		if requestID != "" {
-			requestID = fmt.Sprintf(" [%s: %s]", requestIDHeader, requestID)
-		}
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	l.logger.Printf("%s %s %s %s %d %q in %0.6fms%s", nowFormatted, scheme, r.Method, r.URL.Path, statusCode, r.UserAgent(), float64(duration)/float64(time.Millisecond), requestID)
 }
 
 func InputValues(r *http.Request, field string) ([]string, bool) {

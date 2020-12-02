@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
+	autoscalingInformers "k8s.io/client-go/informers/autoscaling/v2beta2"
 	v1informers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/informers/internalinterfaces"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -47,24 +48,32 @@ var eventKindsIgnoreRebuild = []string{
 	permission.PermAppUpdateRoutable.FullName(),
 }
 
+type podListener interface {
+	OnPodEvent(*apiv1.Pod)
+}
+type podListeners map[string]podListener
+
 type clusterController struct {
-	mu                 sync.Mutex
-	cluster            *ClusterClient
-	informerFactory    informers.SharedInformerFactory
-	podInformerFactory informers.SharedInformerFactory
-	podInformer        v1informers.PodInformer
-	serviceInformer    v1informers.ServiceInformer
-	nodeInformer       v1informers.NodeInformer
-	stopCh             chan struct{}
-	cancel             context.CancelFunc
-	resourceReadyCache map[types.NamespacedName]bool
-	startedAt          time.Time
-	leader             int32
-	wg                 sync.WaitGroup
+	mu                      sync.Mutex
+	cluster                 *ClusterClient
+	informerFactory         informers.SharedInformerFactory
+	filteredInformerFactory informers.SharedInformerFactory
+	podInformer             v1informers.PodInformer
+	serviceInformer         v1informers.ServiceInformer
+	nodeInformer            v1informers.NodeInformer
+	hpaInformer             autoscalingInformers.HorizontalPodAutoscalerInformer
+	stopCh                  chan struct{}
+	cancel                  context.CancelFunc
+	resourceReadyCache      map[types.NamespacedName]bool
+	startedAt               time.Time
+	podListeners            map[string]podListeners
+	podListenersMu          sync.RWMutex
+	wg                      sync.WaitGroup
+	leader                  int32
 }
 
 func initAllControllers(p *kubernetesProvisioner) error {
-	return forEachCluster(func(client *ClusterClient) error {
+	return forEachCluster(context.Background(), func(client *ClusterClient) error {
 		_, err := getClusterController(p, client)
 		return err
 	})
@@ -83,6 +92,7 @@ func getClusterController(p *kubernetesProvisioner, cluster *ClusterClient) (*cl
 		cancel:             cancel,
 		resourceReadyCache: make(map[types.NamespacedName]bool),
 		startedAt:          time.Now(),
+		podListeners:       make(map[string]podListeners),
 	}
 	err := c.initLeaderElection(ctx)
 	if err != nil {
@@ -162,6 +172,25 @@ func (c *clusterController) start() error {
 			}
 		},
 	})
+
+	informer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			pod, ok := obj.(*apiv1.Pod)
+			if !ok {
+				return
+			}
+
+			c.notifyPodChanges(pod)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			newPod, ok := newObj.(*apiv1.Pod)
+			if !ok {
+				return
+			}
+			c.notifyPodChanges(newPod)
+		},
+	})
+
 	return nil
 }
 
@@ -202,6 +231,40 @@ func (c *clusterController) onDelete(obj interface{}) error {
 	}
 	c.enqueuePodDelete(pod)
 	return nil
+}
+
+func (c *clusterController) notifyPodChanges(pod *apiv1.Pod) {
+	c.podListenersMu.RLock()
+	defer c.podListenersMu.RUnlock()
+
+	appName := pod.ObjectMeta.Labels["tsuru.io/app-name"]
+	listeners, contains := c.podListeners[appName]
+	if !contains {
+		return
+	}
+
+	for _, listener := range listeners {
+		listener.OnPodEvent(pod)
+	}
+}
+
+func (c *clusterController) addPodListener(appName string, key string, listener podListener) {
+	c.podListenersMu.Lock()
+	defer c.podListenersMu.Unlock()
+
+	if c.podListeners[appName] == nil {
+		c.podListeners[appName] = make(podListeners)
+	}
+	c.podListeners[appName][key] = listener
+}
+
+func (c *clusterController) removePodListener(appName string, key string) {
+	c.podListenersMu.Lock()
+	defer c.podListenersMu.Unlock()
+
+	if c.podListeners[appName] != nil {
+		delete(c.podListeners[appName], key)
+	}
 }
 
 func (c *clusterController) enqueuePodDelete(pod *apiv1.Pod) {
@@ -280,11 +343,27 @@ func (c *clusterController) getNodeInformer() (v1informers.NodeInformer, error) 
 	return c.nodeInformer, err
 }
 
+func (c *clusterController) getHPAInformer() (autoscalingInformers.HorizontalPodAutoscalerInformer, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hpaInformer == nil {
+		err := c.withFilteredInformerFactory(func(factory informers.SharedInformerFactory) {
+			c.hpaInformer = factory.Autoscaling().V2beta2().HorizontalPodAutoscalers()
+			c.hpaInformer.Informer()
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	err := c.waitForSync(c.hpaInformer.Informer())
+	return c.hpaInformer, err
+}
+
 func (c *clusterController) getPodInformerWait(wait bool) (v1informers.PodInformer, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.podInformer == nil {
-		err := c.withPodInformerFactory(func(factory informers.SharedInformerFactory) {
+		err := c.withFilteredInformerFactory(func(factory informers.SharedInformerFactory) {
 			c.podInformer = factory.Core().V1().Pods()
 			c.podInformer.Informer()
 		})
@@ -318,8 +397,8 @@ func (c *clusterController) getFactory() (informers.SharedInformerFactory, error
 	return c.informerFactory, err
 }
 
-func (c *clusterController) withPodInformerFactory(fn func(factory informers.SharedInformerFactory)) error {
-	factory, err := c.getPodFactory()
+func (c *clusterController) withFilteredInformerFactory(fn func(factory informers.SharedInformerFactory)) error {
+	factory, err := c.getFilteredFactory()
 	if err != nil {
 		return err
 	}
@@ -328,13 +407,13 @@ func (c *clusterController) withPodInformerFactory(fn func(factory informers.Sha
 	return nil
 }
 
-func (c *clusterController) getPodFactory() (informers.SharedInformerFactory, error) {
-	if c.podInformerFactory != nil {
-		return c.podInformerFactory, nil
+func (c *clusterController) getFilteredFactory() (informers.SharedInformerFactory, error) {
+	if c.filteredInformerFactory != nil {
+		return c.filteredInformerFactory, nil
 	}
 	var err error
-	c.podInformerFactory, err = podInformerFactory(c.cluster)
-	return c.podInformerFactory, err
+	c.filteredInformerFactory, err = filteredInformerFactory(c.cluster)
+	return c.filteredInformerFactory, err
 }
 
 func contextWithCancelByChannel(ctx context.Context, ch chan struct{}, timeout time.Duration) (context.Context, func()) {
@@ -428,7 +507,7 @@ func (c *clusterController) initLeaderElection(ctx context.Context) error {
 	return nil
 }
 
-func podInformerFactory(client *ClusterClient) (informers.SharedInformerFactory, error) {
+func filteredInformerFactory(client *ClusterClient) (informers.SharedInformerFactory, error) {
 	return InformerFactory(client, internalinterfaces.TweakListOptionsFunc(func(opts *metav1.ListOptions) {
 		ls := provision.IsServiceLabelSet(tsuruLabelPrefix)
 		opts.LabelSelector = labels.SelectorFromSet(labels.Set(ls.ToIsServiceSelector())).String()

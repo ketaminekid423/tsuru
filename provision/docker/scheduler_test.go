@@ -38,7 +38,7 @@ func (s *S) TestSchedulerSchedule(c *check.C) {
 	c.Assert(err, check.IsNil)
 	p := pool.Pool{Name: "pool1"}
 	o := pool.AddPoolOptions{Name: p.Name}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool(p.Name, []string{
 		"tsuruteam",
@@ -93,7 +93,7 @@ func (s *S) TestSchedulerScheduleFilteringNodes(c *check.C) {
 	c.Assert(err, check.IsNil)
 	p := pool.Pool{Name: "pool1"}
 	o := pool.AddPoolOptions{Name: p.Name}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool(p.Name, []string{
 		"tsuruteam",
@@ -239,7 +239,7 @@ func (s *S) TestSchedulerScheduleNoName(c *check.C) {
 	c.Assert(err, check.IsNil)
 	p := pool.Pool{Name: "pool1"}
 	o := pool.AddPoolOptions{Name: p.Name}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool(p.Name, []string{
 		"tsuruteam",
@@ -290,10 +290,10 @@ func (s *S) TestSchedulerNoNodes(c *check.C) {
 	clusterInstance, err := cluster.New(&scheduler, &cluster.MapStorage{}, "")
 	c.Assert(err, check.IsNil)
 	o := pool.AddPoolOptions{Name: "mypool"}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	o = pool.AddPoolOptions{Name: "mypool2"}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	opts := docker.CreateContainerOptions{}
 	schedOpts := &container.SchedulerOpts{AppName: app.Name, ProcessName: "web"}
@@ -319,7 +319,7 @@ func (s *S) TestSchedulerScheduleWithMemoryAwareness(c *check.C) {
 		provisioner:         s.p,
 	}
 	o := pool.AddPoolOptions{Name: "mypool"}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	server1, err := testing.NewServer("127.0.0.1:0", nil, nil)
 	c.Assert(err, check.IsNil)
@@ -346,7 +346,8 @@ func (s *S) TestSchedulerScheduleWithMemoryAwareness(c *check.C) {
 	err = contColl.Insert(cont1)
 	c.Assert(err, check.Equals, nil)
 	for i := 0; i < 5; i++ {
-		cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
+		id := fmt.Sprint(i)
+		cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
 		err = contColl.Insert(cont)
 		c.Assert(err, check.IsNil)
 		opts := docker.CreateContainerOptions{
@@ -410,7 +411,7 @@ func (s *S) TestSchedulerScheduleWithMemoryAwarenessWithAutoScale(c *check.C) {
 		provisioner:         s.p,
 	}
 	o := pool.AddPoolOptions{Name: "mypool"}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	server1, err := testing.NewServer("127.0.0.1:0", nil, nil)
 	c.Assert(err, check.IsNil)
@@ -437,7 +438,8 @@ func (s *S) TestSchedulerScheduleWithMemoryAwarenessWithAutoScale(c *check.C) {
 	err = contColl.Insert(cont1)
 	c.Assert(err, check.Equals, nil)
 	for i := 0; i < 5; i++ {
-		cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
+		id := fmt.Sprint(i)
+		cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
 		err = contColl.Insert(cont)
 		c.Assert(err, check.IsNil)
 		opts := docker.CreateContainerOptions{
@@ -499,7 +501,7 @@ func (s *S) TestSchedulerScheduleWithMemoryAwarenessWithAutoScaleDisabledForPool
 		provisioner:         s.p,
 	}
 	o := pool.AddPoolOptions{Name: "mypool"}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	server1, err := testing.NewServer("127.0.0.1:0", nil, nil)
 	c.Assert(err, check.IsNil)
@@ -526,7 +528,8 @@ func (s *S) TestSchedulerScheduleWithMemoryAwarenessWithAutoScaleDisabledForPool
 	err = contColl.Insert(cont1)
 	c.Assert(err, check.Equals, nil)
 	for i := 0; i < 5; i++ {
-		cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
+		id := fmt.Sprint(i)
+		cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "oblivion"}}
 		err = contColl.Insert(cont)
 		c.Assert(err, check.IsNil)
 		opts := docker.CreateContainerOptions{
@@ -584,7 +587,8 @@ func (s *S) TestChooseNodeDistributesNodesEqually(c *check.C) {
 	for i := 0; i < numberOfUnits; i++ {
 		go func(i int) {
 			defer wg.Done()
-			cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "coolapp9"}}
+			id := fmt.Sprint(i)
+			cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "coolapp9"}}
 			insertErr := contColl.Insert(cont)
 			c.Assert(insertErr, check.IsNil)
 			node, insertErr := sched.chooseNodeToAdd(nodes, cont.Name, "coolapp9", "web")
@@ -630,7 +634,8 @@ func (s *S) TestChooseNodeDistributesNodesEquallyDifferentApps(c *check.C) {
 	for i := 0; i < numberOfUnits; i++ {
 		go func(i int) {
 			defer wg.Done()
-			cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "oblivion", ProcessName: "web"}}
+			id := fmt.Sprint(i)
+			cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "oblivion", ProcessName: "web"}}
 			insertErr := contColl.Insert(cont)
 			c.Assert(insertErr, check.IsNil)
 			node, insertErr := sched.chooseNodeToAdd(nodes, cont.Name, "oblivion", "web")
@@ -673,7 +678,8 @@ func (s *S) TestChooseNodeDistributesNodesEquallyDifferentProcesses(c *check.C) 
 	for i := 0; i < numberOfUnits; i++ {
 		go func(i int) {
 			defer wg.Done()
-			cont := container.Container{Container: types.Container{ID: string(i), Name: fmt.Sprintf("unit%d", i), AppName: "skyrim", ProcessName: "worker"}}
+			id := fmt.Sprint(i)
+			cont := container.Container{Container: types.Container{ID: id, Name: fmt.Sprintf("unit%d", i), AppName: "skyrim", ProcessName: "worker"}}
 			insertErr := contColl.Insert(cont)
 			c.Assert(insertErr, check.IsNil)
 			node, insertErr := sched.chooseNodeToAdd(nodes, cont.Name, "skyrim", "worker")
@@ -911,7 +917,7 @@ func (s *S) TestGetRemovableContainer(c *check.C) {
 	c.Assert(err, check.IsNil)
 	p := pool.Pool{Name: "pool1"}
 	o := pool.AddPoolOptions{Name: p.Name}
-	err = pool.AddPool(o)
+	err = pool.AddPool(context.TODO(), o)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool(p.Name, []string{
 		"tsuruteam",
@@ -1064,7 +1070,7 @@ func (s *S) TestChooseContainerToBeRemovedTable(c *check.C) {
 	for i, tt := range tests {
 		scheduler := segregatedScheduler{provisioner: s.p}
 		contColl := s.p.Collection()
-		contColl.DropCollection()
+		contColl.RemoveAll(nil)
 		for j, cont := range tt.conts {
 			cont.ID = fmt.Sprintf("id-%d", j)
 			contColl.Insert(cont)

@@ -77,6 +77,7 @@ var _ = check.Suite(&S{})
 var nativeScheme = auth.ManagedScheme(native.NativeScheme{})
 
 func (s *S) SetUpSuite(c *check.C) {
+	app.TestLogWriterWaitOnClose = true
 	s.collName = "docker_unit"
 	s.imageCollName = "docker_image"
 	s.repoNamespace = "tsuru"
@@ -118,7 +119,7 @@ func (s *S) SetUpSuite(c *check.C) {
 	s.user = &auth.User{Email: "myadmin@arrakis.com", Password: "123456", Quota: quota.UnlimitedQuota}
 	nScheme := auth.ManagedScheme(native.NativeScheme{})
 	app.AuthScheme = nScheme
-	_, err = nScheme.Create(s.user)
+	_, err = nScheme.Create(context.TODO(), s.user)
 	c.Assert(err, check.IsNil)
 	s.token = permissiontest.ExistingUserWithPermission(c, nativeScheme, s.user, permission.Permission{
 		Scheme:  permission.PermAll,
@@ -132,7 +133,7 @@ func (s *S) SetUpTest(c *check.C) {
 	iaas.ResetAll()
 	repositorytest.Reset()
 	queue.ResetQueue()
-	repository.Manager().CreateUser(s.user.Email)
+	repository.Manager().CreateUser(context.TODO(), s.user.Email)
 	s.p = &dockerProvisioner{storage: &cluster.MapStorage{}}
 	err := s.p.Initialize()
 	c.Assert(err, check.IsNil)
@@ -150,7 +151,7 @@ func (s *S) SetUpTest(c *check.C) {
 	c.Assert(err, check.IsNil)
 	routertest.FakeRouter.Reset()
 	opts := pool.AddPoolOptions{Name: "test-default", Default: true}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	s.conn.Tokens().Remove(bson.M{"appname": bson.M{"$ne": ""}})
 	s.logBuf = safe.NewBuffer(nil)
@@ -179,12 +180,12 @@ func (s *S) SetUpTest(c *check.C) {
 	s.mockService.Plan.OnDefaultPlan = func() (*appTypes.Plan, error) {
 		return &defaultPlan, nil
 	}
-	s.mockService.UserQuota.OnGet = func(email string) (*quota.Quota, error) {
-		c.Assert(email, check.Equals, s.user.Email)
+	s.mockService.UserQuota.OnGet = func(item quota.QuotaItem) (*quota.Quota, error) {
+		c.Assert(item.GetName(), check.Equals, s.user.Email)
 		return &s.user.Quota, nil
 	}
-	s.mockService.UserQuota.OnInc = func(email string, n int) error {
-		c.Assert(email, check.Equals, s.user.Email)
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, n int) error {
+		c.Assert(item.GetName(), check.Equals, s.user.Email)
 		return nil
 	}
 
@@ -214,9 +215,9 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 	clusterDbName, _ := config.GetString("docker:cluster:mongo-database")
-	conn.Apps().Database.Session.DB(clusterDbName).DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database.Session.DB(clusterDbName))
 }
 
 func clearClusterStorage(sess *mgo.Session) error {

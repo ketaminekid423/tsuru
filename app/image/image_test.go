@@ -5,6 +5,8 @@
 package image_test
 
 import (
+	"context"
+
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/app/image"
 	"github.com/tsuru/tsuru/servicemanager"
@@ -67,14 +69,14 @@ func (s *S) TestGetBuildImage(c *check.C) {
 			name:              "more deploys with version",
 			successfulVersion: true,
 			app:               appTypes.MockApp{Platform: "python", Deploys: 1, PlatformVersion: "latest"},
-			expectedImage:     "tsuru/app-myapp:v1",
+			expectedImage:     "tsuru/app-myapp:v2",
 		},
 		{
 			name:              "more deploys with version with ns",
 			successfulVersion: true,
 			ns:                "other-tsuru",
 			app:               appTypes.MockApp{Platform: "python", Deploys: 1, PlatformVersion: "latest"},
-			expectedImage:     "other-tsuru/app-myapp:v1",
+			expectedImage:     "other-tsuru/app-myapp:v3",
 		},
 		{
 			name:              "multiple 10 deploys with version",
@@ -87,7 +89,7 @@ func (s *S) TestGetBuildImage(c *check.C) {
 			registry:          "mock.registry.com",
 			successfulVersion: true,
 			app:               appTypes.MockApp{Platform: "python", Deploys: 1, PlatformVersion: "latest"},
-			expectedImage:     "mock.registry.com/tsuru/app-myapp:v1",
+			expectedImage:     "mock.registry.com/tsuru/app-myapp:v5",
 		},
 	}
 
@@ -97,8 +99,7 @@ func (s *S) TestGetBuildImage(c *check.C) {
 		config.Set("docker:registry", tt.registry)
 		tt.app.Name = "myapp"
 		if tt.successfulVersion {
-			servicemanager.AppVersion.DeleteVersions("myapp")
-			version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+			version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 				App: &appTypes.MockApp{Name: "myapp"},
 			})
 			c.Assert(err, check.IsNil)
@@ -107,7 +108,7 @@ func (s *S) TestGetBuildImage(c *check.C) {
 			err = version.CommitSuccessful()
 			c.Assert(err, check.IsNil)
 		}
-		img, err := image.GetBuildImage(&tt.app)
+		img, err := image.GetBuildImage(context.TODO(), &tt.app)
 		c.Assert(err, check.IsNil)
 		c.Check(img, check.Equals, tt.expectedImage)
 	}

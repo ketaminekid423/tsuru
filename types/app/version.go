@@ -5,6 +5,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 )
 
 var (
-	ErrNoVersionsAvailable = errors.New("no versions available for app")
+	ErrNoVersionsAvailable          = errors.New("no versions available for app")
+	ErrTransactionCancelledByChange = errors.New("The update has been cancelled by a previous change")
+	ErrVersionMarkedToRemoval       = errors.New("the selected version is marked to removal")
 )
 
 type ErrInvalidVersion struct {
@@ -24,13 +27,12 @@ func (i ErrInvalidVersion) Error() string {
 	return fmt.Sprintf("Invalid version: %s", i.Version)
 }
 
-type App interface {
-	GetName() string
-	GetTeamOwner() string
-	GetPlatform() string
-	GetPlatformVersion() string
-	GetDeploys() uint
-	GetUpdatePlatform() bool
+func IsInvalidVersionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, ok := err.(ErrInvalidVersion)
+	return ok
 }
 
 type AppVersion interface {
@@ -40,6 +42,7 @@ type AppVersion interface {
 	BaseImageName() string
 	CommitBaseImage() error
 	CommitSuccessful() error
+	MarkToRemoval() error
 	VersionInfo() AppVersionInfo
 	Processes() (map[string][]string, error)
 	TsuruYamlData() (provTypes.TsuruYamlData, error)
@@ -60,6 +63,9 @@ type AppVersions struct {
 	Count                 int                    `json:"count"`
 	LastSuccessfulVersion int                    `json:"lastSuccessfulVersion"`
 	Versions              map[int]AppVersionInfo `json:"versions"`
+	UpdatedAt             time.Time              `json:"updatedAt"`
+	UpdatedHash           string                 `json:"updatedHash"`
+	MarkedToRemoval       bool                   `json:"markedToRemoval"`
 }
 
 type AppVersionInfo struct {
@@ -77,6 +83,7 @@ type AppVersionInfo struct {
 	DisabledReason   string                 `json:"disabledReason"`
 	Disabled         bool                   `json:"disabled"`
 	DeploySuccessful bool                   `json:"deploySuccessful"`
+	MarkedToRemoval  bool                   `json:"markedToRemoval"`
 }
 
 type NewVersionArgs struct {
@@ -86,24 +93,32 @@ type NewVersionArgs struct {
 	Description    string
 }
 
+type AppVersionWriteOptions struct {
+	// PreviousUpdatedHash is used to avoid a race of updates and loss data by concurrent updates.
+	PreviousUpdatedHash string
+}
+
 type AppVersionService interface {
-	AllAppVersions() ([]AppVersions, error)
-	AppVersions(app App) (AppVersions, error)
-	VersionByPendingImage(app App, imageID string) (AppVersion, error)
-	VersionByImageOrVersion(app App, image string) (AppVersion, error)
-	LatestSuccessfulVersion(app App) (AppVersion, error)
-	NewAppVersion(args NewVersionArgs) (AppVersion, error)
-	DeleteVersions(appName string) error
-	DeleteVersion(appName string, version int) error
-	AppVersionFromInfo(App, AppVersionInfo) AppVersion
+	commonAppVersion
+	VersionByPendingImage(ctx context.Context, app App, imageID string) (AppVersion, error)
+	VersionByImageOrVersion(ctx context.Context, app App, image string) (AppVersion, error)
+	LatestSuccessfulVersion(ctx context.Context, app App) (AppVersion, error)
+	NewAppVersion(ctx context.Context, args NewVersionArgs) (AppVersion, error)
+	AppVersionFromInfo(context.Context, App, AppVersionInfo) AppVersion
 }
 
 type AppVersionStorage interface {
-	UpdateVersion(appName string, vi *AppVersionInfo) error
-	UpdateVersionSuccess(appName string, vi *AppVersionInfo) error
-	NewAppVersion(args NewVersionArgs) (*AppVersionInfo, error)
-	DeleteVersions(appName string) error
-	AllAppVersions() ([]AppVersions, error)
-	AppVersions(app App) (AppVersions, error)
-	DeleteVersion(appName string, version int) error
+	commonAppVersion
+	UpdateVersion(ctx context.Context, appName string, vi *AppVersionInfo, opts ...*AppVersionWriteOptions) error
+	UpdateVersionSuccess(ctx context.Context, appName string, vi *AppVersionInfo, opts ...*AppVersionWriteOptions) error
+	NewAppVersion(ctx context.Context, args NewVersionArgs) (*AppVersionInfo, error)
+}
+
+type commonAppVersion interface {
+	AllAppVersions(ctx context.Context, appNamesFilter ...string) ([]AppVersions, error)
+	AppVersions(ctx context.Context, app App) (AppVersions, error)
+	DeleteVersions(ctx context.Context, appName string, opts ...*AppVersionWriteOptions) error
+	DeleteVersionIDs(ctx context.Context, appName string, versions []int, opts ...*AppVersionWriteOptions) error
+	MarkToRemoval(ctx context.Context, appName string, opts ...*AppVersionWriteOptions) error
+	MarkVersionsToRemoval(ctx context.Context, appName string, versions []int, opts ...*AppVersionWriteOptions) error
 }

@@ -5,6 +5,7 @@
 package kubernetes
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -171,7 +172,7 @@ func (s *S) TestManagerDeployNodeContainer(c *check.C) {
 	err := nodecontainer.AddNewContainer("", &c1)
 	c.Assert(err, check.IsNil)
 	poolName := "mypool"
-	err = pool.AddPool(pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
 	c.Assert(err, check.IsNil)
 	m := nodeContainerManager{}
 	err = m.DeployNodeContainer(&c1, poolName, servicecommon.PoolFilter{}, false)
@@ -234,6 +235,7 @@ func (s *S) TestManagerDeployNodeContainer(c *check.C) {
 					},
 				},
 				Spec: apiv1.PodSpec{
+					EnableServiceLinks: func(b bool) *bool { return &b }(false),
 					ServiceAccountName: "node-container-bs",
 					Affinity:           expectedAffinity,
 					Volumes: []apiv1.Volume{
@@ -289,6 +291,46 @@ func (s *S) TestManagerDeployNodeContainer(c *check.C) {
 	})
 }
 
+func (s *S) TestManagerDeployNodeContainerOnSinglePool(c *check.C) {
+	s.mock.MockfakeNodes(c)
+	s.clusterClient.CustomData[singlePoolKey] = "true"
+	c1 := nodecontainer.NodeContainerConfig{
+		Name: "bs",
+		Config: docker.Config{
+			Image:      "bsimg",
+			Env:        []string{"a=b"},
+			Entrypoint: []string{"cmd0"},
+			Cmd:        []string{"cmd1"},
+		},
+		HostConfig: docker.HostConfig{
+			RestartPolicy: docker.AlwaysRestart(),
+			Privileged:    true,
+			Binds:         []string{"/xyz:/abc:ro"},
+		},
+	}
+	err := nodecontainer.AddNewContainer("", &c1)
+	c.Assert(err, check.IsNil)
+	poolName := "mypool"
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
+	c.Assert(err, check.IsNil)
+	m := nodeContainerManager{}
+	err = m.DeployNodeContainer(&c1, poolName, servicecommon.PoolFilter{}, false)
+	c.Assert(err, check.IsNil)
+	ns := s.client.PoolNamespace(poolName)
+	daemons, err := s.client.AppsV1().DaemonSets(ns).List(metav1.ListOptions{})
+	c.Assert(err, check.IsNil)
+	c.Assert(daemons.Items, check.HasLen, 1)
+	daemon, err := s.client.AppsV1().DaemonSets(ns).Get("node-container-bs-pool-mypool", metav1.GetOptions{})
+	c.Assert(err, check.IsNil)
+	expectedAffinity := &apiv1.Affinity{}
+	c.Assert(daemon.Spec.Template.Spec.Affinity, check.DeepEquals, expectedAffinity)
+	err = m.DeployNodeContainer(&c1, "", servicecommon.PoolFilter{Exclude: []string{poolName}}, false)
+	c.Assert(err, check.IsNil)
+	daemon, err = s.client.AppsV1().DaemonSets(ns).Get("node-container-bs-all", metav1.GetOptions{})
+	c.Assert(err, check.ErrorMatches, "daemonsets.apps \"node-container-bs-all\" not found")
+	c.Assert(daemon, check.IsNil)
+}
+
 func (s *S) TestManagerDeployNodeContainerIgnoreInvalidPools(c *check.C) {
 	s.mock.MockfakeNodes(c)
 	c1 := nodecontainer.NodeContainerConfig{
@@ -299,7 +341,7 @@ func (s *S) TestManagerDeployNodeContainerIgnoreInvalidPools(c *check.C) {
 	}
 	err := nodecontainer.AddNewContainer("", &c1)
 	c.Assert(err, check.IsNil)
-	err = pool.AddPool(pool.AddPoolOptions{Name: "anotherpool", Provisioner: "docker"})
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: "anotherpool", Provisioner: "docker"})
 	c.Assert(err, check.IsNil)
 	m := nodeContainerManager{}
 	err = m.DeployNodeContainer(&c1, "anotherpool", servicecommon.PoolFilter{}, false)
@@ -315,7 +357,7 @@ func (s *S) TestManagerDeployNodeContainerWithPoolNamespaces(c *check.C) {
 	defer config.Unset("kubernetes:use-pool-namespaces")
 	s.mock.MockfakeNodes(c)
 	poolName := "mypool"
-	err := pool.AddPool(pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
 	c.Assert(err, check.IsNil)
 	var counter int32
 	s.client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (handled bool, ret runtime.Object, err error) {
@@ -431,7 +473,7 @@ func (s *S) TestManagerDeployNodeContainerBSSpecialMount(c *check.C) {
 	c.Assert(err, check.IsNil)
 	m := nodeContainerManager{}
 	poolName := "main"
-	err = pool.AddPool(pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
 	c.Assert(err, check.IsNil)
 	err = m.DeployNodeContainer(&c1, poolName, servicecommon.PoolFilter{}, false)
 	c.Assert(err, check.IsNil)
@@ -498,7 +540,7 @@ func (s *S) TestManagerDeployNodeContainerBSMultiCluster(c *check.C) {
 	c.Assert(err, check.IsNil)
 	m := nodeContainerManager{}
 	poolName := "main"
-	err = pool.AddPool(pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: poolName, Provisioner: provisionerName})
 	c.Assert(err, check.IsNil)
 	err = m.DeployNodeContainer(&c1, poolName, servicecommon.PoolFilter{}, false)
 	c.Assert(err, check.IsNil)

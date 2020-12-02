@@ -25,9 +25,9 @@ func (s *S) TestNewClusterController(c *check.C) {
 	watchFake := watch.NewFake()
 	s.client.Fake.PrependWatchReactor("pods", ktesting.DefaultWatchReactor(watchFake, nil))
 	a := &app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
-	labels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	labels, err := provision.ServiceLabels(context.TODO(), provision.ServiceLabelsOpts{
 		App:     a,
 		Process: "p1",
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
@@ -47,7 +47,9 @@ func (s *S) TestNewClusterController(c *check.C) {
 	}
 	c.Assert(err, check.IsNil)
 	defer rebuild.Shutdown(context.Background())
-	_, err = getClusterController(s.p, s.clusterClient)
+	ctr, err := getClusterController(s.p, s.clusterClient)
+	c.Assert(err, check.IsNil)
+	_, err = ctr.getPodInformerWait(true)
 	c.Assert(err, check.IsNil)
 
 	basePod := &apiv1.Pod{
@@ -92,4 +94,29 @@ func (s *S) TestNewRouterControllerSameInstance(c *check.C) {
 	c2, err := getClusterController(s.p, s.clusterClient)
 	c.Assert(err, check.IsNil)
 	c.Assert(c1, check.Equals, c2)
+}
+
+type podListenerImpl struct {
+}
+
+func (*podListenerImpl) OnPodEvent(pod *apiv1.Pod) {
+}
+
+func (s *S) TestPodListeners(c *check.C) {
+
+	podListener1 := &podListenerImpl{}
+	podListener2 := &podListenerImpl{}
+
+	clusterController, err := getClusterController(s.p, s.clusterClient)
+	c.Assert(err, check.IsNil)
+	clusterController.addPodListener("my-app", "listerner1", podListener1)
+	c.Assert(clusterController.podListeners["my-app"], check.HasLen, 1)
+	clusterController.addPodListener("my-app", "listerner2", podListener2)
+	clusterController.removePodListener("my-app", "listerner1")
+	c.Assert(clusterController.podListeners["my-app"], check.HasLen, 1)
+
+	_, contains := clusterController.podListeners["my-app"]["listerner2"]
+	c.Assert(contains, check.Equals, true)
+	clusterController.removePodListener("my-app", "listerner2")
+	c.Assert(clusterController.podListeners["my-app"], check.HasLen, 0)
 }

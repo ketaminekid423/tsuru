@@ -23,6 +23,8 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 	"app.update.unit.remove",
 	"app.update.unit.register",
 	"app.update.unit.status",
+	"app.update.unit.autoscale.add",
+	"app.update.unit.autoscale.remove",
 	"app.update.env.set",
 	"app.update.env.unset",
 	"app.update.restart",
@@ -36,6 +38,7 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 	"app.update.cname.add",
 	"app.update.cname.remove",
 	"app.update.plan",
+	"app.update.planoverride",
 	"app.update.platform",
 	"app.update.bind",
 	"app.update.bind-volume",
@@ -158,6 +161,7 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 	"service-instance.update.tags",
 	"service-instance.update.teamowner",
 	"service-instance.update.plan",
+	"service-instance.update.parameters",
 ).add(
 	"role.create",
 	"role.delete",
@@ -174,7 +178,7 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 ).add(
 	"platform.create",
 	"platform.delete",
-	"platform.update",
+	"platform.update.events",
 	"platform.read.events",
 ).add(
 	"plan.create",
@@ -218,6 +222,7 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 	"event-block.add",
 	"event-block.remove",
 ).add(
+	"cluster.admin",
 	"cluster.read.events",
 	"cluster.create",
 	"cluster.update",
@@ -239,4 +244,12 @@ var PermissionRegistry = (&registry{}).addWithCtx(
 	"webhook.create",
 	"webhook.update",
 	"webhook.delete",
+).addWithCtx(
+	"router", []permTypes.ContextType{permTypes.CtxRouter},
+).addWithCtx(
+	"router.create", []permTypes.ContextType{},
+).add(
+	"router.read.events",
+	"router.update",
+	"router.delete",
 )

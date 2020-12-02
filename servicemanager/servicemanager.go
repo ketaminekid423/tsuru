@@ -12,11 +12,13 @@ import (
 	"github.com/tsuru/tsuru/types/event"
 	"github.com/tsuru/tsuru/types/provision"
 	"github.com/tsuru/tsuru/types/quota"
+	"github.com/tsuru/tsuru/types/router"
 	"github.com/tsuru/tsuru/types/service"
 	"github.com/tsuru/tsuru/types/tracker"
 )
 
 var (
+	App                       app.AppService
 	AppCache                  cache.AppCacheService
 	Plan                      app.PlanService
 	Platform                  app.PlatformService
@@ -32,4 +34,7 @@ var (
 	AppLog                    app.AppLogService
 	InstanceTracker           tracker.InstanceService
 	AppVersion                app.AppVersionService
+	DynamicRouter             router.DynamicRouterService
+	AuthGroup                 auth.GroupService
+	Pool                      provision.PoolService
 )

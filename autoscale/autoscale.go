@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/globalsign/mgo"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/api/shutdown"
@@ -160,6 +161,7 @@ func (a *Config) String() string {
 }
 
 func (a *Config) runScaler() (retErr error) {
+	_, ctx := opentracing.StartSpanFromContext(context.Background(), "autoscale runScaler")
 	defer func() {
 		if r := recover(); r != nil {
 			retErr = errors.Errorf("recovered panic, we can never stop! panic: %v", r)
@@ -177,7 +179,7 @@ func (a *Config) runScaler() (retErr error) {
 			continue
 		}
 		var nodes []provision.Node
-		nodes, err = nodeProv.ListNodes(nil)
+		nodes, err = nodeProv.ListNodes(context.TODO(), nil)
 		if err != nil {
 			a.logDebug("skipped provisioner, error getting nodes: %v", err)
 			continue
@@ -197,7 +199,7 @@ func (a *Config) runScaler() (retErr error) {
 		clusterMap[pool] = append(clusterMap[pool], node)
 	}
 	for pool, nodes := range clusterMap {
-		a.runScalerInNodes(provPoolMap[pool], pool, nodes)
+		a.runScalerInNodes(ctx, provPoolMap[pool], pool, nodes)
 	}
 	return
 }
@@ -216,7 +218,7 @@ func nodesToSpec(nodes []provision.Node) []provision.NodeSpec {
 	return nodeSpecs
 }
 
-func (a *Config) runScalerInNodes(prov provision.NodeProvisioner, pool string, nodes []provision.Node) {
+func (a *Config) runScalerInNodes(ctx context.Context, prov provision.NodeProvisioner, pool string, nodes []provision.Node) {
 	evt, err := event.NewInternal(&event.Opts{
 		Target:       event.Target{Type: event.TargetTypePool, Value: pool},
 		InternalKind: EventKind,
@@ -294,7 +296,7 @@ func (a *Config) runScalerInNodes(prov provision.NodeProvisioner, pool string, n
 		}
 	}
 	if !customData.Rule.PreventRebalance {
-		err := a.rebalanceIfNeeded(evt, prov, pool, nodes, &customData)
+		err := a.rebalanceIfNeeded(ctx, evt, prov, pool, nodes, &customData)
 		if err != nil {
 			if customData.Result.IsRebalanceOnly() {
 				retErr = err
@@ -305,7 +307,7 @@ func (a *Config) runScalerInNodes(prov provision.NodeProvisioner, pool string, n
 	}
 }
 
-func (a *Config) rebalanceIfNeeded(evt *event.Event, prov provision.NodeProvisioner, pool string, nodes []provision.Node, customData *EventCustomData) error {
+func (a *Config) rebalanceIfNeeded(ctx context.Context, evt *event.Event, prov provision.NodeProvisioner, pool string, nodes []provision.Node, customData *EventCustomData) error {
 	if len(customData.Result.ToRemove) > 0 {
 		return nil
 	}
@@ -319,7 +321,7 @@ func (a *Config) rebalanceIfNeeded(evt *event.Event, prov provision.NodeProvisio
 		evt.SetLogWriter(io.MultiWriter(oldWriter, buf))
 		defer evt.SetLogWriter(oldWriter)
 	}
-	shouldRebalance, err := rebalanceProv.RebalanceNodes(provision.RebalanceNodesOptions{
+	shouldRebalance, err := rebalanceProv.RebalanceNodes(ctx, provision.RebalanceNodesOptions{
 		Force: len(customData.Nodes) > 0,
 		Pool:  pool,
 		Event: evt,
@@ -382,12 +384,12 @@ func (a *Config) addNode(evt *event.Event, prov provision.NodeProvisioner, pool 
 		ClientCert: machine.ClientCert,
 		ClientKey:  machine.ClientKey,
 	}
-	err = prov.AddNode(createOpts)
+	err = prov.AddNode(context.TODO(), createOpts)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error adding new node %s", newAddr)
 	}
 	evt.Logf("new machine created: %s - started!", newAddr)
-	node, err := prov.GetNode(newAddr)
+	node, err := prov.GetNode(context.TODO(), newAddr)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error getting new node %s", newAddr)
 	}
@@ -413,7 +415,7 @@ func (a *Config) removeMultipleNodes(evt *event.Event, prov provision.NodeProvis
 			defer wg.Done()
 			n := chosenNodes[i]
 			buf := safe.NewBuffer(nil)
-			err := node.RemoveNode(node.RemoveNodeArgs{
+			err := node.RemoveNode(context.TODO(), node.RemoveNodeArgs{
 				Prov:       prov,
 				Address:    n.Address,
 				Writer:     buf,
@@ -506,7 +508,7 @@ func chooseMetadataFromNodes(modelNodes []provision.Node) (map[string]string, er
 }
 
 func preciseUnitsByNode(pool string, nodes []provision.Node) (map[string][]provision.Unit, error) {
-	appsInPool, err := app.List(&app.Filter{
+	appsInPool, err := app.List(context.TODO(), &app.Filter{
 		Pool: pool,
 	})
 	if err != nil {

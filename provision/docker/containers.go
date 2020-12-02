@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -99,7 +100,7 @@ func (p *dockerProvisioner) HandleMoveErrors(moveErrors chan error, writer io.Wr
 	return nil
 }
 
-func (p *dockerProvisioner) runReplaceUnitsPipeline(w io.Writer, a provision.App, toAdd map[string]*containersToAdd, toRemoveContainers []container.Container, version appTypes.AppVersion, toHosts ...string) ([]container.Container, error) {
+func (p *dockerProvisioner) runReplaceUnitsPipeline(ctx context.Context, w io.Writer, a provision.App, toAdd map[string]*containersToAdd, toRemoveContainers []container.Container, version appTypes.AppVersion, toHosts ...string) ([]container.Container, error) {
 	var toHost string
 	if len(toHosts) > 0 {
 		toHost = toHosts[0]
@@ -136,14 +137,14 @@ func (p *dockerProvisioner) runReplaceUnitsPipeline(w io.Writer, a provision.App
 			&provisionUnbindOldUnits,
 		)
 	}
-	err := pipeline.Execute(args)
+	err := pipeline.Execute(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 	return pipeline.Result().([]container.Container), nil
 }
 
-func (p *dockerProvisioner) runCreateUnitsPipeline(w io.Writer, a provision.App, toAdd map[string]*containersToAdd, version appTypes.AppVersion) ([]container.Container, error) {
+func (p *dockerProvisioner) runCreateUnitsPipeline(ctx context.Context, w io.Writer, a provision.App, toAdd map[string]*containersToAdd, version appTypes.AppVersion) ([]container.Container, error) {
 	if w == nil {
 		w = ioutil.Discard
 	}
@@ -163,14 +164,14 @@ func (p *dockerProvisioner) runCreateUnitsPipeline(w io.Writer, a provision.App,
 		&setRouterHealthcheck,
 		&updateAppImage,
 	)
-	err := pipeline.Execute(args)
+	err := pipeline.Execute(ctx, args)
 	if err != nil {
 		return nil, err
 	}
 	return pipeline.Result().([]container.Container), nil
 }
 
-func (p *dockerProvisioner) MoveOneContainer(c container.Container, toHost string, errCh chan error, wg *sync.WaitGroup, writer io.Writer, locker container.AppLocker) container.Container {
+func (p *dockerProvisioner) MoveOneContainer(ctx context.Context, c container.Container, toHost string, errCh chan error, wg *sync.WaitGroup, writer io.Writer, locker container.AppLocker) container.Container {
 	if wg != nil {
 		defer wg.Done()
 	}
@@ -180,7 +181,7 @@ func (p *dockerProvisioner) MoveOneContainer(c container.Container, toHost strin
 		return container.Container{}
 	}
 	defer locker.Unlock(c.AppName)
-	a, err := app.GetByName(c.AppName)
+	a, err := app.GetByName(ctx, c.AppName)
 	if err != nil {
 		errCh <- &tsuruErrors.CompositeError{
 			Base:    err,
@@ -188,7 +189,7 @@ func (p *dockerProvisioner) MoveOneContainer(c container.Container, toHost strin
 		}
 		return container.Container{}
 	}
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(a)
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, a)
 	if err != nil {
 		errCh <- &tsuruErrors.CompositeError{
 			Base:    err,
@@ -214,7 +215,7 @@ func (p *dockerProvisioner) MoveOneContainer(c container.Container, toHost strin
 		evtClone.SetLogWriter(ioutil.Discard)
 		pipelineWriter = evtClone
 	}
-	addedContainers, err := p.runReplaceUnitsPipeline(pipelineWriter, a, toAdd, []container.Container{c}, version, destHosts...)
+	addedContainers, err := p.runReplaceUnitsPipeline(ctx, pipelineWriter, a, toAdd, []container.Container{c}, version, destHosts...)
 	if evt != nil {
 		evt.LogsFrom(evtClone)
 	}
@@ -233,7 +234,7 @@ func (p *dockerProvisioner) MoveOneContainer(c container.Container, toHost strin
 	return addedContainers[0]
 }
 
-func (p *dockerProvisioner) moveContainer(contId string, toHost string, writer io.Writer) (container.Container, error) {
+func (p *dockerProvisioner) moveContainer(ctx context.Context, contId string, toHost string, writer io.Writer) (container.Container, error) {
 	cont, err := p.GetContainer(contId)
 	if err != nil {
 		return container.Container{}, err
@@ -242,18 +243,18 @@ func (p *dockerProvisioner) moveContainer(contId string, toHost string, writer i
 	wg.Add(1)
 	moveErrors := make(chan error, 1)
 	locker := &appLocker{}
-	createdContainer := p.MoveOneContainer(*cont, toHost, moveErrors, &wg, writer, locker)
+	createdContainer := p.MoveOneContainer(ctx, *cont, toHost, moveErrors, &wg, writer, locker)
 	close(moveErrors)
 	return createdContainer, p.HandleMoveErrors(moveErrors, writer)
 }
 
-func (p *dockerProvisioner) moveContainerList(containers []container.Container, toHost string, writer io.Writer) error {
+func (p *dockerProvisioner) moveContainerList(ctx context.Context, containers []container.Container, toHost string, writer io.Writer) error {
 	locker := &appLocker{}
 	moveErrors := make(chan error, len(containers))
 	wg := sync.WaitGroup{}
 	wg.Add(len(containers))
 	for _, c := range containers {
-		go p.MoveOneContainer(c, toHost, moveErrors, &wg, writer, locker)
+		go p.MoveOneContainer(ctx, c, toHost, moveErrors, &wg, writer, locker)
 	}
 	go func() {
 		wg.Wait()
@@ -262,7 +263,7 @@ func (p *dockerProvisioner) moveContainerList(containers []container.Container, 
 	return p.HandleMoveErrors(moveErrors, writer)
 }
 
-func (p *dockerProvisioner) MoveContainers(fromHost, toHost string, writer io.Writer) error {
+func (p *dockerProvisioner) MoveContainers(ctx context.Context, fromHost, toHost string, writer io.Writer) error {
 	containers, err := p.listContainersByHost(fromHost)
 	if err != nil {
 		return err
@@ -272,10 +273,10 @@ func (p *dockerProvisioner) MoveContainers(fromHost, toHost string, writer io.Wr
 		return nil
 	}
 	fmt.Fprintf(writer, "Moving %d units...\n", len(containers))
-	return p.moveContainerList(containers, toHost, writer)
+	return p.moveContainerList(ctx, containers, toHost, writer)
 }
 
-func (p *dockerProvisioner) rebalanceContainersByFilter(writer io.Writer, appFilter []string, metadataFilter map[string]string, dryRun bool) (*dockerProvisioner, error) {
+func (p *dockerProvisioner) rebalanceContainersByFilter(ctx context.Context, writer io.Writer, appFilter []string, metadataFilter map[string]string, dryRun bool) (*dockerProvisioner, error) {
 	var hostsFilter []string
 	if metadataFilter != nil {
 		nodes, err := p.cluster.UnfilteredNodesForMetadata(metadataFilter)
@@ -313,18 +314,18 @@ func (p *dockerProvisioner) rebalanceContainersByFilter(writer io.Writer, appFil
 		}
 	}
 	fmt.Fprintf(writer, "Rebalancing %d units...\n", len(containers))
-	return p, p.moveContainerList(containers, "", writer)
+	return p, p.moveContainerList(ctx, containers, "", writer)
 }
 
-func (p *dockerProvisioner) rebalanceContainersByHost(address string, w io.Writer) error {
+func (p *dockerProvisioner) rebalanceContainersByHost(ctx context.Context, address string, w io.Writer) error {
 	containers, err := p.listContainersByHost(address)
 	if err != nil {
 		return err
 	}
-	return p.moveContainerList(containers, "", w)
+	return p.moveContainerList(ctx, containers, "", w)
 }
 
-func (p *dockerProvisioner) runCommandInContainer(version appTypes.AppVersion, app provision.App, stdin io.Reader, stdout, stderr io.Writer, pty container.Pty, cmds ...string) error {
+func (p *dockerProvisioner) runCommandInContainer(ctx context.Context, version appTypes.AppVersion, app provision.App, stdin io.Reader, stdout, stderr io.Writer, pty container.Pty, cmds ...string) error {
 	if stdout == nil {
 		stdout = ioutil.Discard
 	}
@@ -335,7 +336,7 @@ func (p *dockerProvisioner) runCommandInContainer(version appTypes.AppVersion, a
 	for _, e := range provision.EnvsForApp(app, "", false, version) {
 		envs = append(envs, fmt.Sprintf("%s=%s", e.Name, e.Value))
 	}
-	labelSet, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	labelSet, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: app,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			Provisioner:   provisionerName,

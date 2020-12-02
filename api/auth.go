@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -71,10 +72,11 @@ func teamTarget(t string) event.Target {
 //   403: Forbidden
 //   409: User already exists
 func createUser(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
 	registrationEnabled, _ := config.GetBool("auth:user-registration")
 	if !registrationEnabled {
 		token := r.Header.Get("Authorization")
-		t, err := app.AuthScheme.Auth(token)
+		t, err := app.AuthScheme.Auth(ctx, token)
 		if err != nil {
 			return createDisabledErr
 		}
@@ -99,7 +101,7 @@ func createUser(w http.ResponseWriter, r *http.Request) error {
 		Email:    email,
 		Password: password,
 	}
-	_, err = app.AuthScheme.Create(&u)
+	_, err = app.AuthScheme.Create(ctx, &u)
 	if err != nil {
 		return handleAuthError(err)
 	}
@@ -119,6 +121,7 @@ func createUser(w http.ResponseWriter, r *http.Request) error {
 //   403: Forbidden
 //   404: Not found
 func login(w http.ResponseWriter, r *http.Request) (err error) {
+	ctx := r.Context()
 	params := map[string]string{
 		"email": r.URL.Query().Get(":email"),
 	}
@@ -126,7 +129,7 @@ func login(w http.ResponseWriter, r *http.Request) (err error) {
 	for key, values := range fields {
 		params[key] = values[0]
 	}
-	token, err := app.AuthScheme.Login(params)
+	token, err := app.AuthScheme.Login(ctx, params)
 	if err != nil {
 		return handleAuthError(err)
 	}
@@ -139,7 +142,7 @@ func login(w http.ResponseWriter, r *http.Request) (err error) {
 // responses:
 //   200: Ok
 func logout(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
-	return app.AuthScheme.Logout(t.GetValue())
+	return app.AuthScheme.Logout(r.Context(), t.GetValue())
 }
 
 // title: change password
@@ -153,6 +156,7 @@ func logout(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 //   403: Forbidden
 //   404: Not found
 func changePassword(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	managed, ok := app.AuthScheme.(auth.ManagedScheme)
 	if !ok {
 		return &errors.HTTP{Code: http.StatusBadRequest, Message: nonManagedSchemeMsg}
@@ -182,7 +186,7 @@ func changePassword(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 			Message: "New password and password confirmation didn't match.",
 		}
 	}
-	err = managed.ChangePassword(t, oldPassword, newPassword)
+	err = managed.ChangePassword(ctx, t, oldPassword, newPassword)
 	if err != nil {
 		return handleAuthError(err)
 	}
@@ -199,6 +203,7 @@ func changePassword(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 //   403: Forbidden
 //   404: Not found
 func resetPassword(w http.ResponseWriter, r *http.Request) (err error) {
+	ctx := r.Context()
 	managed, ok := app.AuthScheme.(auth.ManagedScheme)
 	if !ok {
 		return &errors.HTTP{Code: http.StatusBadRequest, Message: nonManagedSchemeMsg}
@@ -224,12 +229,12 @@ func resetPassword(w http.ResponseWriter, r *http.Request) (err error) {
 		return err
 	}
 	if token == "" {
-		return managed.StartPasswordReset(u)
+		return managed.StartPasswordReset(ctx, u)
 	}
-	return managed.ResetPassword(u, token)
+	return managed.ResetPassword(ctx, u, token)
 }
 
-var teamRenameFns = []func(oldName, newName string) error{
+var teamRenameFns = []func(ctx context.Context, oldName, newName string) error{
 	app.RenameTeam,
 	service.RenameServiceTeam,
 	service.RenameServiceInstanceTeam,
@@ -247,6 +252,7 @@ var teamRenameFns = []func(oldName, newName string) error{
 //   401: Unauthorized
 //   404: Team not found
 func updateTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	name := r.URL.Query().Get(":name")
 	type teamChange struct {
 		NewName string
@@ -264,7 +270,7 @@ func updateTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	if !allowed {
 		return permission.ErrUnauthorized
 	}
-	_, err := servicemanager.Team.FindByName(name)
+	_, err := servicemanager.Team.FindByName(ctx, name)
 	if err != nil {
 		if err == authTypes.ErrTeamNotFound {
 			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
@@ -283,27 +289,27 @@ func updateTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	}
 	defer func() { evt.Done(err) }()
 	if changeRequest.NewName == "" {
-		return servicemanager.Team.Update(name, changeRequest.Tags)
+		return servicemanager.Team.Update(ctx, name, changeRequest.Tags)
 	}
 	u, err := t.User()
 	if err != nil {
 		return err
 	}
-	err = servicemanager.Team.Create(changeRequest.NewName, changeRequest.Tags, u)
+	err = servicemanager.Team.Create(ctx, changeRequest.NewName, changeRequest.Tags, u)
 	if err != nil {
 		return err
 	}
-	var toRollback []func(oldName, newName string) error
+	var toRollback []func(ctx context.Context, oldName, newName string) error
 	defer func() {
 		if err == nil {
 			return
 		}
-		rollbackErr := servicemanager.Team.Remove(changeRequest.NewName)
+		rollbackErr := servicemanager.Team.Remove(ctx, changeRequest.NewName)
 		if rollbackErr != nil {
 			log.Errorf("error rolling back team creation from %v to %v", name, changeRequest.NewName)
 		}
 		for _, rollbackFn := range toRollback {
-			rollbackErr := rollbackFn(changeRequest.NewName, name)
+			rollbackErr := rollbackFn(ctx, changeRequest.NewName, name)
 			if rollbackErr != nil {
 				fnName := runtime.FuncForPC(reflect.ValueOf(rollbackFn).Pointer()).Name()
 				log.Errorf("error rolling back team name change in %v from %q to %q", fnName, name, changeRequest.NewName)
@@ -311,13 +317,13 @@ func updateTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		}
 	}()
 	for _, fn := range teamRenameFns {
-		err = fn(name, changeRequest.NewName)
+		err = fn(ctx, name, changeRequest.NewName)
 		if err != nil {
 			return err
 		}
 		toRollback = append(toRollback, fn)
 	}
-	return servicemanager.Team.Remove(name)
+	return servicemanager.Team.Remove(ctx, name)
 }
 
 // title: team create
@@ -330,6 +336,7 @@ func updateTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   401: Unauthorized
 //   409: Team already exists
 func createTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	allowed := permission.Check(t, permission.PermTeamCreate)
 	if !allowed {
 		return permission.ErrUnauthorized
@@ -355,7 +362,7 @@ func createTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	if err != nil {
 		return err
 	}
-	err = servicemanager.Team.Create(team.Name, team.Tags, u)
+	err = servicemanager.Team.Create(ctx, team.Name, team.Tags, u)
 	switch err {
 	case authTypes.ErrInvalidTeamName:
 		return &errors.HTTP{Code: http.StatusBadRequest, Message: err.Error()}
@@ -377,6 +384,7 @@ func createTeam(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   403: Forbidden
 //   404: Not found
 func removeTeam(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	name := r.URL.Query().Get(":name")
 	allowed := permission.Check(t, permission.PermTeamDelete,
 		permission.Context(permTypes.CtxTeam, name),
@@ -395,7 +403,7 @@ func removeTeam(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	err = servicemanager.Team.Remove(name)
+	err = servicemanager.Team.Remove(ctx, name)
 	if err != nil {
 		if _, ok := err.(*authTypes.ErrTeamStillUsed); ok {
 			msg := fmt.Sprintf("This team cannot be removed because there are still references to it:\n%s", err)
@@ -418,8 +426,9 @@ func removeTeam(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 //   204: No content
 //   401: Unauthorized
 func teamList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	permsForTeam := permission.PermissionRegistry.PermissionsWithContextType(permTypes.CtxTeam)
-	teams, err := servicemanager.Team.List()
+	teams, err := servicemanager.Team.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -468,8 +477,9 @@ func teamList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   404: Not found
 //   401: Unauthorized
 func teamInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	teamName := r.URL.Query().Get(":name")
-	team, err := servicemanager.Team.FindByName(teamName)
+	team, err := servicemanager.Team.FindByName(ctx, teamName)
 	if err != nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
@@ -477,13 +487,13 @@ func teamInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	if !canRead {
 		return permission.ErrUnauthorized
 	}
-	apps, err := app.List(&app.Filter{
+	apps, err := app.List(ctx, &app.Filter{
 		Extra:     map[string][]string{"teams": {team.Name}},
 		TeamOwner: team.Name})
 	if err != nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
-	pools, err := pool.ListPoolsForTeam(team.Name)
+	pools, err := pool.ListPoolsForTeam(ctx, team.Name)
 	if err != nil {
 		return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
@@ -663,6 +673,7 @@ func listKeys(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   401: Unauthorized
 //   404: Not found
 func removeUser(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	email := r.URL.Query().Get("user")
 	if email == "" {
 		email = t.GetUserName()
@@ -694,12 +705,12 @@ func removeUser(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 	}
 	manager := repository.Manager()
 	for _, name := range appNames {
-		manager.RevokeAccess(name, u.Email)
+		manager.RevokeAccess(ctx, name, u.Email)
 	}
-	if err := manager.RemoveUser(u.Email); err != nil {
+	if err := manager.RemoveUser(ctx, u.Email); err != nil {
 		log.Errorf("Failed to remove user from repository manager: %s", err)
 	}
-	return app.AuthScheme.Remove(u)
+	return app.AuthScheme.Remove(ctx, u)
 }
 
 type schemeData struct {
@@ -714,7 +725,7 @@ type schemeData struct {
 // responses:
 //   200: OK
 func authScheme(w http.ResponseWriter, r *http.Request) error {
-	info, err := app.AuthScheme.Info()
+	info, err := app.AuthScheme.Info(r.Context())
 	if err != nil {
 		return err
 	}
@@ -800,69 +811,99 @@ type rolePermissionData struct {
 	Name         string
 	ContextType  string
 	ContextValue string
+	Group        string `json:",omitempty"`
 }
 
 type apiUser struct {
 	Email       string
 	Roles       []rolePermissionData
 	Permissions []rolePermissionData
+	Groups      []string
 }
 
 func createAPIUser(perms []permission.Permission, user *auth.User, roleMap map[string]*permission.Role, includeAll bool) (*apiUser, error) {
-	var permData []rolePermissionData
-	roleData := make([]rolePermissionData, 0, len(user.Roles))
 	if roleMap == nil {
 		roleMap = make(map[string]*permission.Role)
 	}
 	allGlobal := true
+
+	apiUsr := &apiUser{
+		Email:  user.Email,
+		Groups: user.Groups,
+		Roles:  make([]rolePermissionData, 0, len(user.Roles)),
+	}
+
 	for _, userRole := range user.Roles {
-		role := roleMap[userRole.Name]
-		if role == nil {
-			r, err := permission.FindRole(userRole.Name)
-			if err != nil {
-				return nil, err
-			}
-			role = &r
-			roleMap[userRole.Name] = role
+		isGlobal, err := expandRoleData(perms, userRole, apiUsr, roleMap, includeAll, "")
+		if err != nil {
+			return nil, err
 		}
-		allPermsMatch := true
-		permissions := role.PermissionsFor(userRole.ContextValue)
-		if len(permissions) == 0 && !includeAll {
-			continue
-		}
-		rolePerms := make([]rolePermissionData, len(permissions))
-		for i, p := range permissions {
-			if perms != nil && allPermsMatch && !permission.CheckFromPermList(perms, p.Scheme, p.Context) {
-				allPermsMatch = false
-				break
-			}
-			rolePerms[i] = rolePermissionData{
-				Name:         p.Scheme.FullName(),
-				ContextType:  string(p.Context.CtxType),
-				ContextValue: p.Context.Value,
-			}
-		}
-		if !allPermsMatch {
-			continue
-		}
-		roleData = append(roleData, rolePermissionData{
-			Name:         userRole.Name,
-			ContextType:  string(role.ContextType),
-			ContextValue: userRole.ContextValue,
-		})
-		permData = append(permData, rolePerms...)
-		if role.ContextType != permTypes.CtxGlobal {
+		if !isGlobal {
 			allGlobal = false
 		}
 	}
+
+	groups, err := user.UserGroups()
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range groups {
+		for _, groupRole := range group.Roles {
+			isGlobal, err := expandRoleData(perms, groupRole, apiUsr, roleMap, includeAll, group.Name)
+			if err != nil {
+				return nil, err
+			}
+			if !isGlobal {
+				allGlobal = false
+			}
+		}
+	}
+
 	if !includeAll && allGlobal {
 		return nil, nil
 	}
-	return &apiUser{
-		Email:       user.Email,
-		Roles:       roleData,
-		Permissions: permData,
-	}, nil
+	return apiUsr, nil
+}
+
+func expandRoleData(perms []permission.Permission, userRole authTypes.RoleInstance, user *apiUser, roleMap map[string]*permission.Role, includeAll bool, group string) (bool, error) {
+	role := roleMap[userRole.Name]
+	if role == nil {
+		r, err := permission.FindRole(userRole.Name)
+		if err != nil {
+			return true, err
+		}
+		role = &r
+		roleMap[userRole.Name] = role
+	}
+	allPermsMatch := true
+	permissions := role.PermissionsFor(userRole.ContextValue)
+	if len(permissions) == 0 && !includeAll {
+		return true, nil
+	}
+	rolePerms := make([]rolePermissionData, len(permissions))
+	for i, p := range permissions {
+		if perms != nil && allPermsMatch && !permission.CheckFromPermList(perms, p.Scheme, p.Context) {
+			allPermsMatch = false
+			break
+		}
+		rolePerms[i] = rolePermissionData{
+			Name:         p.Scheme.FullName(),
+			ContextType:  string(p.Context.CtxType),
+			ContextValue: p.Context.Value,
+			Group:        group,
+		}
+	}
+	if !allPermsMatch {
+		return true, nil
+	}
+	user.Roles = append(user.Roles, rolePermissionData{
+		Name:         userRole.Name,
+		ContextType:  string(role.ContextType),
+		ContextValue: userRole.ContextValue,
+		Group:        group,
+	})
+	user.Permissions = append(user.Permissions, rolePerms...)
+	return role.ContextType == permTypes.CtxGlobal, nil
 }
 
 // title: user list

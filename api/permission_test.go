@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,7 +29,7 @@ import (
 )
 
 func (s *S) TestAddRole(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	role := bytes.NewBufferString("name=test&context=global")
 	req, err := http.NewRequest(http.MethodPost, "/roles", role)
 	c.Assert(err, check.IsNil)
@@ -107,7 +108,7 @@ func (s *S) TestAddRoleNameAlreadyExists(c *check.C) {
 }
 
 func (s *S) TestRemoveRole(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	_, err := permission.NewRole("test", "app", "")
 	c.Assert(err, check.IsNil)
 	req, err := http.NewRequest(http.MethodDelete, "/roles/test", nil)
@@ -136,7 +137,7 @@ func (s *S) TestRemoveRole(c *check.C) {
 }
 
 func (s *S) TestRemoveRoleWithUsers(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	_, err := permission.NewRole("test", "app", "")
 	c.Assert(err, check.IsNil)
 	req, err := http.NewRequest(http.MethodDelete, "/roles/test", nil)
@@ -179,7 +180,7 @@ func (s *S) TestRemoveRoleUnauthorized(c *check.C) {
 }
 
 func (s *S) TestListRoles(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	rec := httptest.NewRecorder()
 	req, err := http.NewRequest(http.MethodGet, "/roles", nil)
 	c.Assert(err, check.IsNil)
@@ -196,7 +197,7 @@ func (s *S) TestListRoles(c *check.C) {
 }
 
 func (s *S) TestRoleInfoNotFound(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	rec := httptest.NewRecorder()
 	req, err := http.NewRequest(http.MethodGet, "/roles/xpto.update", nil)
 	c.Assert(err, check.IsNil)
@@ -211,7 +212,7 @@ func (s *S) TestRoleInfoNotFound(c *check.C) {
 }
 
 func (s *S) TestRoleInfo(c *check.C) {
-	s.conn.Roles().DropCollection()
+	s.conn.Roles().RemoveAll(nil)
 	rec := httptest.NewRecorder()
 	req, err := http.NewRequest(http.MethodGet, "/roles/majortomrole.update", nil)
 	c.Assert(err, check.IsNil)
@@ -318,12 +319,12 @@ func (s *S) TestAddPermissionsToARoleSyncGitRepository(c *check.C) {
 	_, err := permission.NewRole("test", "team", "")
 	c.Assert(err, check.IsNil)
 	user := &auth.User{Email: "userWithRole@groundcontrol.com", Password: "123456"}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	err = user.AddRole("test", s.team.Name)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	users, err := repositorytest.Granted("myapp")
 	c.Assert(err, check.IsNil)
@@ -399,14 +400,14 @@ func (s *S) TestRemovePermissionsFromRoleSyncGitRepository(c *check.C) {
 	err = r.AddPermissions("app.deploy")
 	c.Assert(err, check.IsNil)
 	user := &auth.User{Email: "userWithRole@groundcontrol.com", Password: "123456"}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	err = user.AddRole("test", s.team.Name)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = repository.Manager().GrantAccess(a.Name, user.Email)
+	err = repository.Manager().GrantAccess(context.TODO(), a.Name, user.Email)
 	c.Assert(err, check.IsNil)
 	rec := httptest.NewRecorder()
 	req, err := http.NewRequest(http.MethodDelete, "/roles/test/permissions/app.deploy", nil)
@@ -519,7 +520,7 @@ func (s *S) TestAssignRoleCheckGandalf(c *check.C) {
 	c.Assert(err, check.IsNil)
 	_, emptyToken := permissiontest.CustomUserWithPermission(c, nativeScheme, "user2")
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	roleBody := bytes.NewBufferString(fmt.Sprintf("email=%s&context=myapp", emptyToken.GetUserName()))
 	req, err := http.NewRequest(http.MethodPost, "/roles/test/user", roleBody)
@@ -646,7 +647,7 @@ func (s *S) TestDissociateRoleCheckGandalf(c *check.C) {
 	otherUser, err := auth.ConvertNewUser(otherToken.User())
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = otherUser.AddRole(role.Name, "myapp")
 	c.Assert(err, check.IsNil)
@@ -826,7 +827,7 @@ func (s *S) TestRemoveDefaultRole(c *check.C) {
 func (s *S) benchmarkAddPermissionToRole(c *check.C, body string) []string {
 	c.StopTimer()
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	role, err := permission.NewRole("test", "team", "")
 	c.Assert(err, check.IsNil)
@@ -838,7 +839,7 @@ func (s *S) benchmarkAddPermissionToRole(c *check.C, body string) []string {
 		email := fmt.Sprintf("user-%d@somewhere.com", i)
 		userEmails = append(userEmails, email)
 		user := &auth.User{Email: email, Password: "123456"}
-		_, err = nativeScheme.Create(user)
+		_, err = nativeScheme.Create(context.TODO(), user)
 		c.Assert(err, check.IsNil)
 		err = user.AddRole("test", s.team.Name)
 		c.Assert(err, check.IsNil)
@@ -1011,7 +1012,7 @@ func (s *S) TestRoleUpdateSingleField(c *check.C) {
 func (s *S) TestAssignRoleToTeamToken(c *check.C) {
 	_, err := permission.NewRole("newrole", "app", "")
 	c.Assert(err, check.IsNil)
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
@@ -1031,7 +1032,7 @@ func (s *S) TestAssignRoleToTeamToken(c *check.C) {
 	server := RunServer(true)
 	server.ServeHTTP(recorder, req)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	t, err := servicemanager.TeamToken.FindByTokenID(teamToken.TokenID)
+	t, err := servicemanager.TeamToken.FindByTokenID(context.TODO(), teamToken.TokenID)
 	c.Assert(err, check.IsNil)
 	c.Assert(t.Roles, check.DeepEquals, []authTypes.RoleInstance{
 		{Name: "newrole", ContextValue: "myapp"},
@@ -1049,7 +1050,7 @@ func (s *S) TestAssignRoleToTeamToken(c *check.C) {
 }
 
 func (s *S) TestAssignRoleToTeamTokenRoleNotFound(c *check.C) {
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
@@ -1085,7 +1086,7 @@ func (s *S) TestAssignRoleToTeamTokenRoleNotFound(c *check.C) {
 func (s *S) TestAssignRoleToTeamTokenNotAuthorized(c *check.C) {
 	_, err := permission.NewRole("newrole", "app", "")
 	c.Assert(err, check.IsNil)
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
@@ -1108,11 +1109,11 @@ func (s *S) TestAssignRoleToTeamTokenNotAuthorized(c *check.C) {
 func (s *S) TestDissociateRoleFromTeamToken(c *check.C) {
 	_, err := permission.NewRole("newrole", "app", "")
 	c.Assert(err, check.IsNil)
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
-	err = servicemanager.TeamToken.AddRole(teamToken.TokenID, "newrole", "myapp")
+	err = servicemanager.TeamToken.AddRole(context.TODO(), teamToken.TokenID, "newrole", "myapp")
 	c.Assert(err, check.IsNil)
 	req, err := http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("/1.6/roles/newrole/token/%s?context=myapp", teamToken.TokenID),
@@ -1131,7 +1132,7 @@ func (s *S) TestDissociateRoleFromTeamToken(c *check.C) {
 	server := RunServer(true)
 	server.ServeHTTP(recorder, req)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	t, err := servicemanager.TeamToken.FindByTokenID(teamToken.TokenID)
+	t, err := servicemanager.TeamToken.FindByTokenID(context.TODO(), teamToken.TokenID)
 	c.Assert(err, check.IsNil)
 	c.Assert(t.Roles, check.HasLen, 0)
 	c.Assert(eventtest.EventDesc{
@@ -1149,11 +1150,11 @@ func (s *S) TestDissociateRoleFromTeamToken(c *check.C) {
 func (s *S) TestDissociateRoleFromTeamTokenRoleNotFound(c *check.C) {
 	_, err := permission.NewRole("newrole", "app", "")
 	c.Assert(err, check.IsNil)
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
-	err = servicemanager.TeamToken.AddRole(teamToken.TokenID, "newrole", "myapp")
+	err = servicemanager.TeamToken.AddRole(context.TODO(), teamToken.TokenID, "newrole", "myapp")
 	c.Assert(err, check.IsNil)
 	req, err := http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("/1.6/roles/rolenotfound/token/%s?context=myapp", teamToken.TokenID),
@@ -1172,7 +1173,7 @@ func (s *S) TestDissociateRoleFromTeamTokenRoleNotFound(c *check.C) {
 	server := RunServer(true)
 	server.ServeHTTP(recorder, req)
 	c.Assert(recorder.Code, check.Equals, http.StatusNotFound)
-	t, err := servicemanager.TeamToken.FindByTokenID(teamToken.TokenID)
+	t, err := servicemanager.TeamToken.FindByTokenID(context.TODO(), teamToken.TokenID)
 	c.Assert(err, check.IsNil)
 	c.Assert(t.Roles, check.HasLen, 1)
 	c.Assert(eventtest.EventDesc{
@@ -1191,11 +1192,11 @@ func (s *S) TestDissociateRoleFromTeamTokenRoleNotFound(c *check.C) {
 func (s *S) TestDissociateRoleFromTeamTokenNotAuthorized(c *check.C) {
 	_, err := permission.NewRole("newrole", "app", "")
 	c.Assert(err, check.IsNil)
-	teamToken, err := servicemanager.TeamToken.Create(authTypes.TeamTokenCreateArgs{
+	teamToken, err := servicemanager.TeamToken.Create(context.TODO(), authTypes.TeamTokenCreateArgs{
 		Team: s.team.Name,
 	}, s.token)
 	c.Assert(err, check.IsNil)
-	err = servicemanager.TeamToken.AddRole(teamToken.TokenID, "newrole", "myapp")
+	err = servicemanager.TeamToken.AddRole(context.TODO(), teamToken.TokenID, "newrole", "myapp")
 	c.Assert(err, check.IsNil)
 	req, err := http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("/1.6/roles/rolenotfound/token/%s?context=myapp", teamToken.TokenID),
@@ -1212,7 +1213,225 @@ func (s *S) TestDissociateRoleFromTeamTokenNotAuthorized(c *check.C) {
 	server.ServeHTTP(recorder, req)
 	c.Assert(recorder.Code, check.Equals, http.StatusForbidden)
 	c.Assert(recorder.Body.String(), check.Equals, "You don't have permission to do this action\n")
-	t, err := servicemanager.TeamToken.FindByTokenID(teamToken.TokenID)
+	t, err := servicemanager.TeamToken.FindByTokenID(context.TODO(), teamToken.TokenID)
 	c.Assert(err, check.IsNil)
 	c.Assert(t.Roles, check.HasLen, 1)
+}
+
+func (s *S) TestAssignRoleToAuthGroup(c *check.C) {
+	_, err := permission.NewRole("newrole", "app", "")
+	c.Assert(err, check.IsNil)
+	body := strings.NewReader(`context=myapp&group_name=g1`)
+	req, err := http.NewRequest(http.MethodPost, "/1.9/roles/newrole/group", body)
+	c.Assert(err, check.IsNil)
+	_, token := permissiontest.CustomUserWithPermission(c, nativeScheme, "user1", permission.Permission{
+		Scheme:  permission.PermRoleUpdateAssign,
+		Context: permission.Context(permTypes.CtxGlobal, ""),
+	}, permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "myteam"),
+	})
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusOK, check.Commentf("body: %s", recorder.Body.String()))
+	groups, err := servicemanager.AuthGroup.List(nil)
+	c.Assert(err, check.IsNil)
+	c.Assert(groups, check.DeepEquals, []authTypes.Group{
+		{
+			Name: "g1",
+			Roles: []authTypes.RoleInstance{
+				{
+					Name:         "newrole",
+					ContextValue: "myapp",
+				},
+			},
+		},
+	})
+	c.Assert(eventtest.EventDesc{
+		Target: event.Target{Type: event.TargetTypeRole, Value: "newrole"},
+		Owner:  token.GetUserName(),
+		Kind:   "role.update.assign",
+		StartCustomData: []map[string]interface{}{
+			{"name": "group_name", "value": "g1"},
+			{"name": "context", "value": "myapp"},
+			{"name": ":name", "value": "newrole"},
+		},
+	}, eventtest.HasEvent)
+}
+
+func (s *S) TestAssignRoleToAuthGroupRoleNotFound(c *check.C) {
+	body := strings.NewReader(`context=myapp&group_name=g1`)
+	req, err := http.NewRequest(http.MethodPost, "/1.9/roles/rolenotfound/group", body)
+	c.Assert(err, check.IsNil)
+	_, token := permissiontest.CustomUserWithPermission(c, nativeScheme, "user1", permission.Permission{
+		Scheme:  permission.PermRoleUpdateAssign,
+		Context: permission.Context(permTypes.CtxGlobal, ""),
+	}, permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "myteam"),
+	})
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusNotFound)
+	c.Assert(eventtest.EventDesc{
+		Target: event.Target{Type: event.TargetTypeRole, Value: "rolenotfound"},
+		Owner:  token.GetUserName(),
+		Kind:   "role.update.assign",
+		StartCustomData: []map[string]interface{}{
+			{"name": "group_name", "value": "g1"},
+			{"name": "context", "value": "myapp"},
+			{"name": ":name", "value": "rolenotfound"},
+		},
+		ErrorMatches: "role not found",
+	}, eventtest.HasEvent)
+}
+
+func (s *S) TestAssignRoleToAuthGroupNotAuthorized(c *check.C) {
+	_, err := permission.NewRole("newrole", "app", "")
+	c.Assert(err, check.IsNil)
+	body := strings.NewReader(`context=myapp&group_name=g1`)
+	req, err := http.NewRequest(http.MethodPost, "/1.9/roles/newrole/group", body)
+	c.Assert(err, check.IsNil)
+	token := userWithPermission(c, permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "otherteam"),
+	})
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusForbidden)
+	c.Assert(recorder.Body.String(), check.Equals, "You don't have permission to do this action\n")
+}
+
+func (s *S) TestDissociateRoleFromAuthGroup(c *check.C) {
+	_, err := permission.NewRole("newrole", "app", "")
+	c.Assert(err, check.IsNil)
+	err = servicemanager.AuthGroup.AddRole("g1", "newrole", "myapp")
+	c.Assert(err, check.IsNil)
+	req, err := http.NewRequest(http.MethodDelete,
+		"/1.9/roles/newrole/group/g1?context=myapp",
+		nil,
+	)
+	c.Assert(err, check.IsNil)
+	_, token := permissiontest.CustomUserWithPermission(c, nativeScheme, "user1", permission.Permission{
+		Scheme:  permission.PermRoleUpdateDissociate,
+		Context: permission.Context(permTypes.CtxGlobal, ""),
+	}, permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "myteam"),
+	})
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusOK)
+	groups, err := servicemanager.AuthGroup.List(nil)
+	c.Assert(err, check.IsNil)
+	c.Assert(groups, check.DeepEquals, []authTypes.Group{
+		{
+			Name:  "g1",
+			Roles: []authTypes.RoleInstance{},
+		},
+	})
+	c.Assert(eventtest.EventDesc{
+		Target: event.Target{Type: event.TargetTypeRole, Value: "newrole"},
+		Owner:  token.GetUserName(),
+		Kind:   "role.update.dissociate",
+		StartCustomData: []map[string]interface{}{
+			{"name": ":group_name", "value": "g1"},
+			{"name": "context", "value": "myapp"},
+			{"name": ":name", "value": "newrole"},
+		},
+	}, eventtest.HasEvent)
+}
+
+func (s *S) TestDissociateRoleFromAuthGroupRoleNotFound(c *check.C) {
+	_, err := permission.NewRole("newrole", "app", "")
+	c.Assert(err, check.IsNil)
+	err = servicemanager.AuthGroup.AddRole("g1", "newrole", "myapp")
+	c.Assert(err, check.IsNil)
+	req, err := http.NewRequest(http.MethodDelete,
+		"/1.9/roles/rolenotfound/group/g1?context=myapp",
+		nil,
+	)
+	c.Assert(err, check.IsNil)
+	_, token := permissiontest.CustomUserWithPermission(c, nativeScheme, "user1", permission.Permission{
+		Scheme:  permission.PermRoleUpdateDissociate,
+		Context: permission.Context(permTypes.CtxGlobal, ""),
+	}, permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "myteam"),
+	})
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusNotFound)
+	groups, err := servicemanager.AuthGroup.List(nil)
+	c.Assert(err, check.IsNil)
+	c.Assert(groups, check.DeepEquals, []authTypes.Group{
+		{
+			Name: "g1",
+			Roles: []authTypes.RoleInstance{
+				{
+					Name:         "newrole",
+					ContextValue: "myapp",
+				},
+			},
+		},
+	})
+	c.Assert(eventtest.EventDesc{
+		Target: event.Target{Type: event.TargetTypeRole, Value: "rolenotfound"},
+		Owner:  token.GetUserName(),
+		Kind:   "role.update.dissociate",
+		StartCustomData: []map[string]interface{}{
+			{"name": ":group_name", "value": "g1"},
+			{"name": "context", "value": "myapp"},
+			{"name": ":name", "value": "rolenotfound"},
+		},
+		ErrorMatches: "role not found",
+	}, eventtest.HasEvent)
+}
+
+func (s *S) TestDissociateRoleFromAuthGroupNotAuthorized(c *check.C) {
+	_, err := permission.NewRole("newrole", "app", "")
+	c.Assert(err, check.IsNil)
+	err = servicemanager.AuthGroup.AddRole("g1", "newrole", "myapp")
+	c.Assert(err, check.IsNil)
+	req, err := http.NewRequest(http.MethodDelete,
+		"/1.9/roles/newrole/group/g1?context=myapp",
+		nil,
+	)
+	c.Assert(err, check.IsNil)
+	_, token := permissiontest.CustomUserWithPermission(c, nativeScheme, "user1", permission.Permission{
+		Scheme:  permission.PermAppCreate,
+		Context: permission.Context(permTypes.CtxTeam, "myteam"),
+	})
+	req.Header.Set("Authorization", "bearer "+token.GetValue())
+	recorder := httptest.NewRecorder()
+	server := RunServer(true)
+	server.ServeHTTP(recorder, req)
+	c.Assert(recorder.Code, check.Equals, http.StatusForbidden)
+	c.Assert(recorder.Body.String(), check.Equals, "You don't have permission to do this action\n")
+	groups, err := servicemanager.AuthGroup.List(nil)
+	c.Assert(err, check.IsNil)
+	c.Assert(groups, check.DeepEquals, []authTypes.Group{
+		{
+			Name: "g1",
+			Roles: []authTypes.RoleInstance{
+				{
+					Name:         "newrole",
+					ContextValue: "myapp",
+				},
+			},
+		},
+	})
 }

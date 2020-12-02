@@ -41,6 +41,7 @@ import (
 	policy "k8s.io/api/policy/v1beta1"
 	v1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
@@ -56,7 +57,10 @@ const (
 	defaultDeploymentProgressTimeout           = 10 * time.Minute
 	defaultAttachTimeoutAfterContainerFinished = time.Minute
 	defaultSidecarImageName                    = "tsuru/deploy-agent:0.8.4"
+	defaultPreStopSleepSeconds                 = 10
 )
+
+var defaultEphemeralStorageLimit = resource.MustParse("100Mi")
 
 type kubernetesProvisioner struct {
 	mu                 sync.Mutex
@@ -76,14 +80,12 @@ var (
 	_ provision.InterAppProvisioner      = &kubernetesProvisioner{}
 	_ provision.HCProvisioner            = &kubernetesProvisioner{}
 	_ provision.VersionsProvisioner      = &kubernetesProvisioner{}
+	_ provision.LogsProvisioner          = &kubernetesProvisioner{}
+	_ provision.AutoScaleProvisioner     = &kubernetesProvisioner{}
 	_ cluster.ClusteredProvisioner       = &kubernetesProvisioner{}
 	_ cluster.ClusterProvider            = &kubernetesProvisioner{}
-	// _ provision.OptionalLogsProvisioner  = &kubernetesProvisioner{}
-	// _ provision.UnitStatusProvisioner    = &kubernetesProvisioner{}
-	// _ provision.NodeRebalanceProvisioner = &kubernetesProvisioner{}
-	// _ provision.AppFilterProvisioner     = &kubernetesProvisioner{}
-	// _ builder.PlatformBuilder            = &kubernetesProvisioner{}
-	_                         provision.UpdatableProvisioner = &kubernetesProvisioner{}
+	_ provision.UpdatableProvisioner     = &kubernetesProvisioner{}
+
 	mainKubernetesProvisioner *kubernetesProvisioner
 )
 
@@ -201,6 +203,9 @@ func (p *kubernetesProvisioner) InitializeCluster(c *provTypes.Cluster) error {
 }
 
 func (p *kubernetesProvisioner) ValidateCluster(c *provTypes.Cluster) error {
+	if _, ok := c.CustomData[singlePoolKey]; ok && len(c.Pools) != 1 {
+		return errors.Errorf("only one pool is allowed to use entire cluster as single-pool. %d pools found", len(c.Pools))
+	}
 	return nil
 }
 
@@ -244,16 +249,16 @@ func (p *kubernetesProvisioner) GetName() string {
 	return provisionerName
 }
 
-func (p *kubernetesProvisioner) Provision(a provision.App) error {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) Provision(ctx context.Context, a provision.App) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
-	return ensureAppCustomResourceSynced(client, a)
+	return ensureAppCustomResourceSynced(ctx, client, a)
 }
 
-func (p *kubernetesProvisioner) Destroy(a provision.App) error {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) Destroy(ctx context.Context, a provision.App) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
@@ -265,18 +270,18 @@ func (p *kubernetesProvisioner) Destroy(a provision.App) error {
 	if err != nil {
 		return err
 	}
-	if err := p.removeResources(client, app, a); err != nil {
+	if err := p.removeResources(ctx, client, app, a); err != nil {
 		return err
 	}
 	return tclient.TsuruV1().Apps(client.Namespace()).Delete(a.GetName(), &metav1.DeleteOptions{})
 }
 
-func (p *kubernetesProvisioner) removeResources(client *ClusterClient, tsuruApp *tsuruv1.App, app provision.App) error {
-	deps, err := allDeploymentsForAppNS(client, tsuruApp.Spec.NamespaceName, app)
+func (p *kubernetesProvisioner) removeResources(ctx context.Context, client *ClusterClient, tsuruApp *tsuruv1.App, app provision.App) error {
+	deps, err := allDeploymentsForAppNS(ctx, client, tsuruApp.Spec.NamespaceName, app)
 	if err != nil {
 		return err
 	}
-	svcs, err := allServicesForAppNS(client, tsuruApp.Spec.NamespaceName, app)
+	svcs, err := allServicesForAppNS(ctx, client, tsuruApp.Spec.NamespaceName, app)
 	if err != nil {
 		return err
 	}
@@ -327,8 +332,8 @@ func (p *kubernetesProvisioner) removeResources(client *ClusterClient, tsuruApp 
 	return multiErrors.ToError()
 }
 
-func versionsForAppProcess(client *ClusterClient, a provision.App, process string) ([]appTypes.AppVersion, error) {
-	grouped, err := deploymentsDataForApp(client, a)
+func versionsForAppProcess(ctx context.Context, client *ClusterClient, a provision.App, process string) ([]appTypes.AppVersion, error) {
+	grouped, err := deploymentsDataForApp(ctx, client, a)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +349,7 @@ func versionsForAppProcess(client *ClusterClient, a provision.App, process strin
 
 	var versions []appTypes.AppVersion
 	for v := range versionSet {
-		version, err := servicemanager.AppVersion.VersionByImageOrVersion(a, strconv.Itoa(v))
+		version, err := servicemanager.AppVersion.VersionByImageOrVersion(ctx, a, strconv.Itoa(v))
 		if err != nil {
 			return nil, err
 		}
@@ -353,19 +358,19 @@ func versionsForAppProcess(client *ClusterClient, a provision.App, process strin
 	return versions, nil
 }
 
-func changeState(a provision.App, process string, version appTypes.AppVersion, state servicecommon.ProcessState, w io.Writer) error {
-	client, err := clusterForPool(a.GetPool())
+func changeState(ctx context.Context, a provision.App, process string, version appTypes.AppVersion, state servicecommon.ProcessState, w io.Writer) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
-	err = ensureAppCustomResourceSynced(client, a)
+	err = ensureAppCustomResourceSynced(ctx, client, a)
 	if err != nil {
 		return err
 	}
 
 	var versions []appTypes.AppVersion
 	if version == nil {
-		versions, err = versionsForAppProcess(client, a, process)
+		versions, err = versionsForAppProcess(ctx, client, a, process)
 		if err != nil {
 			return err
 		}
@@ -375,7 +380,7 @@ func changeState(a provision.App, process string, version appTypes.AppVersion, s
 
 	var multiErr tsuruErrors.MultiError
 	for _, v := range versions {
-		err = servicecommon.ChangeAppState(&serviceManager{
+		err = servicecommon.ChangeAppState(ctx, &serviceManager{
 			client: client,
 			writer: w,
 		}, a, process, state, v)
@@ -386,43 +391,43 @@ func changeState(a provision.App, process string, version appTypes.AppVersion, s
 	return multiErr.ToError()
 }
 
-func changeUnits(a provision.App, units int, processName string, version appTypes.AppVersion, w io.Writer) error {
-	client, err := clusterForPool(a.GetPool())
+func changeUnits(ctx context.Context, a provision.App, units int, processName string, version appTypes.AppVersion, w io.Writer) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
-	err = ensureAppCustomResourceSynced(client, a)
+	err = ensureAppCustomResourceSynced(ctx, client, a)
 	if err != nil {
 		return err
 	}
-	return servicecommon.ChangeUnits(&serviceManager{
+	return servicecommon.ChangeUnits(ctx, &serviceManager{
 		client: client,
 		writer: w,
 	}, a, units, processName, version)
 }
 
-func (p *kubernetesProvisioner) AddUnits(a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
-	return changeUnits(a, int(units), processName, version, w)
+func (p *kubernetesProvisioner) AddUnits(ctx context.Context, a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
+	return changeUnits(ctx, a, int(units), processName, version, w)
 }
 
-func (p *kubernetesProvisioner) RemoveUnits(a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
-	return changeUnits(a, -int(units), processName, version, w)
+func (p *kubernetesProvisioner) RemoveUnits(ctx context.Context, a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
+	return changeUnits(ctx, a, -int(units), processName, version, w)
 }
 
-func (p *kubernetesProvisioner) Restart(a provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
-	return changeState(a, process, version, servicecommon.ProcessState{Start: true, Restart: true}, w)
+func (p *kubernetesProvisioner) Restart(ctx context.Context, a provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
+	return changeState(ctx, a, process, version, servicecommon.ProcessState{Start: true, Restart: true}, w)
 }
 
-func (p *kubernetesProvisioner) Start(a provision.App, process string, version appTypes.AppVersion) error {
-	return changeState(a, process, version, servicecommon.ProcessState{Start: true}, nil)
+func (p *kubernetesProvisioner) Start(ctx context.Context, a provision.App, process string, version appTypes.AppVersion) error {
+	return changeState(ctx, a, process, version, servicecommon.ProcessState{Start: true}, nil)
 }
 
-func (p *kubernetesProvisioner) Stop(a provision.App, process string, version appTypes.AppVersion) error {
-	return changeState(a, process, version, servicecommon.ProcessState{Stop: true}, nil)
+func (p *kubernetesProvisioner) Stop(ctx context.Context, a provision.App, process string, version appTypes.AppVersion) error {
+	return changeState(ctx, a, process, version, servicecommon.ProcessState{Stop: true}, nil)
 }
 
-func (p *kubernetesProvisioner) Sleep(a provision.App, process string, version appTypes.AppVersion) error {
-	return changeState(a, process, version, servicecommon.ProcessState{Stop: true, Sleep: true}, nil)
+func (p *kubernetesProvisioner) Sleep(ctx context.Context, a provision.App, process string, version appTypes.AppVersion) error {
+	return changeState(ctx, a, process, version, servicecommon.ProcessState{Stop: true, Sleep: true}, nil)
 }
 
 var stateMap = map[apiv1.PodPhase]provision.Status{
@@ -433,7 +438,7 @@ var stateMap = map[apiv1.PodPhase]provision.Status{
 	apiv1.PodUnknown:   provision.StatusError,
 }
 
-func (p *kubernetesProvisioner) podsToUnits(client *ClusterClient, pods []apiv1.Pod, baseApp provision.App, baseNode *apiv1.Node) ([]provision.Unit, error) {
+func (p *kubernetesProvisioner) podsToUnits(ctx context.Context, client *ClusterClient, pods []apiv1.Pod, baseApp provision.App, baseNode *apiv1.Node) ([]provision.Unit, error) {
 	var apps []provision.App
 	if baseApp != nil {
 		apps = append(apps, baseApp)
@@ -442,10 +447,10 @@ func (p *kubernetesProvisioner) podsToUnits(client *ClusterClient, pods []apiv1.
 	if baseNode != nil {
 		nodes = append(nodes, *baseNode)
 	}
-	return p.podsToUnitsMultiple(client, pods, apps, nodes)
+	return p.podsToUnitsMultiple(ctx, client, pods, apps, nodes)
 }
 
-func (p *kubernetesProvisioner) podsToUnitsMultiple(client *ClusterClient, pods []apiv1.Pod, baseApps []provision.App, baseNodes []apiv1.Node) ([]provision.Unit, error) {
+func (p *kubernetesProvisioner) podsToUnitsMultiple(ctx context.Context, client *ClusterClient, pods []apiv1.Pod, baseApps []provision.App, baseNodes []apiv1.Node) ([]provision.Unit, error) {
 	var err error
 	if len(pods) == 0 {
 		return nil, nil
@@ -493,13 +498,13 @@ func (p *kubernetesProvisioner) podsToUnitsMultiple(client *ClusterClient, pods 
 		}
 		podApp, ok := appMap[l.AppName()]
 		if !ok {
-			podApp, err = app.GetByName(l.AppName())
+			podApp, err = app.GetByName(ctx, l.AppName())
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
 			appMap[podApp.GetName()] = podApp
 		}
-		wrapper := kubernetesNodeWrapper{node: node, prov: p}
+		wrapper := kubernetesNodeWrapper{node: node, prov: p, ctx: ctx}
 		u := &url.URL{
 			Scheme: "http",
 			Host:   wrapper.Address(),
@@ -537,6 +542,14 @@ func (p *kubernetesProvisioner) podsToUnitsMultiple(client *ClusterClient, pods 
 				}
 			}
 		}
+
+		var status provision.Status
+		if pod.Status.Phase == apiv1.PodRunning {
+			status = extractStatusFromContainerStatuses(pod.Status.ContainerStatuses)
+		} else {
+			status = stateMap[pod.Status.Phase]
+		}
+
 		units = append(units, provision.Unit{
 			ID:          pod.Name,
 			Name:        pod.Name,
@@ -544,7 +557,7 @@ func (p *kubernetesProvisioner) podsToUnitsMultiple(client *ClusterClient, pods 
 			ProcessName: appProcess,
 			Type:        l.AppPlatform(),
 			IP:          wrapper.ip(),
-			Status:      stateMap[pod.Status.Phase],
+			Status:      status,
 			Address:     u,
 			Addresses:   urls,
 			Version:     appVersion,
@@ -552,6 +565,20 @@ func (p *kubernetesProvisioner) podsToUnitsMultiple(client *ClusterClient, pods 
 		})
 	}
 	return units, nil
+}
+
+func extractStatusFromContainerStatuses(statuses []apiv1.ContainerStatus) provision.Status {
+	for _, containerStatus := range statuses {
+		if containerStatus.Ready {
+			continue
+		}
+		if containerStatus.LastTerminationState.Terminated != nil {
+			return provision.StatusError
+		}
+
+		return provision.StatusStarting
+	}
+	return provision.StatusStarted
 }
 
 // merged from https://github.com/kubernetes/kubernetes/blob/1f69c34478800e150acd022f6313a15e1cb7a97c/pkg/quota/evaluator/core/pods.go#L333
@@ -584,18 +611,18 @@ func nodesForPods(informer v1informers.NodeInformer, pods []apiv1.Pod) ([]apiv1.
 	return nodesRet, nil
 }
 
-func (p *kubernetesProvisioner) Units(apps ...provision.App) ([]provision.Unit, error) {
-	cApps, err := clustersForApps(apps)
+func (p *kubernetesProvisioner) Units(ctx context.Context, apps ...provision.App) ([]provision.Unit, error) {
+	cApps, err := clustersForApps(ctx, apps)
 	if err != nil {
 		return nil, err
 	}
 	var units []provision.Unit
 	for _, cApp := range cApps {
-		pods, err := p.podsForApps(cApp.client, cApp.apps)
+		pods, err := p.podsForApps(ctx, cApp.client, cApp.apps)
 		if err != nil {
 			return nil, err
 		}
-		clusterUnits, err := p.podsToUnitsMultiple(cApp.client, pods, cApp.apps, nil)
+		clusterUnits, err := p.podsToUnitsMultiple(ctx, cApp.client, pods, cApp.apps, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -604,10 +631,10 @@ func (p *kubernetesProvisioner) Units(apps ...provision.App) ([]provision.Unit, 
 	return units, nil
 }
 
-func (p *kubernetesProvisioner) podsForApps(client *ClusterClient, apps []provision.App) ([]apiv1.Pod, error) {
+func (p *kubernetesProvisioner) podsForApps(ctx context.Context, client *ClusterClient, apps []provision.App) ([]apiv1.Pod, error) {
 	inSelectorMap := map[string][]string{}
 	for _, a := range apps {
-		l, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+		l, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 			App: a,
 			ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 				Prefix:      tsuruLabelPrefix,
@@ -652,12 +679,12 @@ func (p *kubernetesProvisioner) podsForApps(client *ClusterClient, apps []provis
 	return podCopies, nil
 }
 
-func (p *kubernetesProvisioner) RoutableAddresses(a provision.App) ([]appTypes.RoutableAddresses, error) {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) RoutableAddresses(ctx context.Context, a provision.App) ([]appTypes.RoutableAddresses, error) {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return nil, err
 	}
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(a)
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, a)
 	if err != nil {
 		if err != appTypes.ErrNoVersionsAvailable {
 			return nil, err
@@ -681,7 +708,7 @@ func (p *kubernetesProvisioner) RoutableAddresses(a provision.App) ([]appTypes.R
 		return nil, err
 	}
 
-	svcs, err := allServicesForAppInformer(svcInformer, ns, a)
+	svcs, err := allServicesForAppInformer(ctx, svcInformer, ns, a)
 	if err != nil {
 		return nil, err
 	}
@@ -704,7 +731,7 @@ func (p *kubernetesProvisioner) RoutableAddresses(a provision.App) ([]appTypes.R
 			if version != 0 {
 				prefix = fmt.Sprintf("v%d.version", version)
 			}
-			rAddr, err = p.routableAddrForProcess(client, a, processName, prefix, version, svc)
+			rAddr, err = p.routableAddrForProcess(ctx, client, a, processName, prefix, version, svc)
 			if err != nil {
 				return nil, err
 			}
@@ -717,7 +744,7 @@ func (p *kubernetesProvisioner) RoutableAddresses(a provision.App) ([]appTypes.R
 		} else {
 			prefix = fmt.Sprintf("v%d.version.%s.process", version, processName)
 		}
-		rAddr, err = p.routableAddrForProcess(client, a, processName, prefix, version, svc)
+		rAddr, err = p.routableAddrForProcess(ctx, client, a, processName, prefix, version, svc)
 		if err != nil {
 			return nil, err
 		}
@@ -727,7 +754,7 @@ func (p *kubernetesProvisioner) RoutableAddresses(a provision.App) ([]appTypes.R
 	return allAddrs, nil
 }
 
-func (p *kubernetesProvisioner) routableAddrForProcess(client *ClusterClient, a provision.App, processName, prefix string, version int, svc apiv1.Service) (appTypes.RoutableAddresses, error) {
+func (p *kubernetesProvisioner) routableAddrForProcess(ctx context.Context, client *ClusterClient, a provision.App, processName, prefix string, version int, svc apiv1.Service) (appTypes.RoutableAddresses, error) {
 	var routableAddrs appTypes.RoutableAddresses
 	var pubPort int32
 	if len(svc.Spec.Ports) > 0 {
@@ -742,7 +769,7 @@ func (p *kubernetesProvisioner) routableAddrForProcess(client *ClusterClient, a 
 	}
 	var addrs []*url.URL
 	if routerLocal {
-		addrs, err = p.addressesForApp(client, a, processName, pubPort, version)
+		addrs, err = p.addressesForApp(ctx, client, a, processName, pubPort, version)
 	} else {
 		addrs, err = p.addressesForPool(client, a.GetPool(), pubPort)
 	}
@@ -759,8 +786,8 @@ func (p *kubernetesProvisioner) routableAddrForProcess(client *ClusterClient, a 
 	}, nil
 }
 
-func (p *kubernetesProvisioner) addressesForApp(client *ClusterClient, a provision.App, processName string, pubPort int32, version int) ([]*url.URL, error) {
-	pods, err := p.podsForApps(client, []provision.App{a})
+func (p *kubernetesProvisioner) addressesForApp(ctx context.Context, client *ClusterClient, a provision.App, processName string, pubPort int32, version int) ([]*url.URL, error) {
+	pods, err := p.podsForApps(ctx, client, []provision.App{a})
 	if err != nil {
 		return nil, err
 	}
@@ -789,7 +816,7 @@ func (p *kubernetesProvisioner) addressesForApp(client *ClusterClient, a provisi
 			if err != nil {
 				return nil, err
 			}
-			wrapper := kubernetesNodeWrapper{node: node, prov: p}
+			wrapper := kubernetesNodeWrapper{node: node, prov: p, ctx: ctx}
 			addrs = append(addrs, &url.URL{
 				Scheme: "http",
 				Host:   fmt.Sprintf("%s:%d", wrapper.Address(), pubPort),
@@ -827,8 +854,8 @@ func (p *kubernetesProvisioner) addressesForPool(client *ClusterClient, poolName
 	return addrs, nil
 }
 
-func (p *kubernetesProvisioner) RegisterUnit(a provision.App, unitID string, customData map[string]interface{}) error {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) RegisterUnit(ctx context.Context, a provision.App, unitID string, customData map[string]interface{}) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
@@ -843,7 +870,7 @@ func (p *kubernetesProvisioner) RegisterUnit(a provision.App, unitID string, cus
 		}
 		return errors.WithStack(err)
 	}
-	units, err := p.podsToUnits(client, []apiv1.Pod{*pod}, a, nil)
+	units, err := p.podsToUnits(ctx, client, []apiv1.Pod{*pod}, a, nil)
 	if err != nil {
 		return err
 	}
@@ -858,7 +885,7 @@ func (p *kubernetesProvisioner) RegisterUnit(a provision.App, unitID string, cus
 	if buildingImage == "" {
 		return nil
 	}
-	version, err := servicemanager.AppVersion.VersionByPendingImage(a, buildingImage)
+	version, err := servicemanager.AppVersion.VersionByPendingImage(ctx, a, buildingImage)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -868,9 +895,9 @@ func (p *kubernetesProvisioner) RegisterUnit(a provision.App, unitID string, cus
 	return errors.WithStack(err)
 }
 
-func (p *kubernetesProvisioner) ListNodes(addressFilter []string) ([]provision.Node, error) {
+func (p *kubernetesProvisioner) ListNodes(ctx context.Context, addressFilter []string) ([]provision.Node, error) {
 	var nodes []provision.Node
-	err := forEachCluster(func(c *ClusterClient) error {
+	err := forEachCluster(ctx, func(c *ClusterClient) error {
 		clusterNodes, err := p.listNodesForCluster(c, nodeFilter{addresses: addressFilter})
 		if err != nil {
 			return err
@@ -888,11 +915,7 @@ func (p *kubernetesProvisioner) ListNodes(addressFilter []string) ([]provision.N
 }
 
 func (p *kubernetesProvisioner) InternalAddresses(ctx context.Context, a provision.App) ([]provision.AppInternalAddress, error) {
-	client, err := clusterForPool(a.GetPool())
-	if err != nil {
-		return nil, err
-	}
-	err = ensureAppCustomResourceSynced(client, a)
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return nil, err
 	}
@@ -910,13 +933,17 @@ func (p *kubernetesProvisioner) InternalAddresses(ctx context.Context, a provisi
 		return nil, err
 	}
 
-	svcs, err := allServicesForAppInformer(svcInformer, ns, a)
+	svcs, err := allServicesForAppInformer(ctx, svcInformer, ns, a)
 	if err != nil {
 		return nil, err
 	}
 
 	addresses := []provision.AppInternalAddress{}
 	for _, service := range svcs {
+		// we can't show headless services
+		if service.Spec.ClusterIP == "None" {
+			continue
+		}
 		for _, port := range service.Spec.Ports {
 			addresses = append(addresses, provision.AppInternalAddress{
 				Domain:   fmt.Sprintf("%s.%s.svc.cluster.local", service.Name, ns),
@@ -966,9 +993,9 @@ func (p *kubernetesProvisioner) listNodesForCluster(cluster *ClusterClient, filt
 	return nodes, nil
 }
 
-func (p *kubernetesProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) ([]provision.Node, error) {
+func (p *kubernetesProvisioner) ListNodesByFilter(ctx context.Context, filter *provTypes.NodeFilter) ([]provision.Node, error) {
 	var nodes []provision.Node
-	err := forEachCluster(func(c *ClusterClient) error {
+	err := forEachCluster(ctx, func(c *ClusterClient) error {
 		clusterNodes, err := p.listNodesForCluster(c, nodeFilter{metadata: filter.Metadata})
 		if err != nil {
 			return err
@@ -985,8 +1012,8 @@ func (p *kubernetesProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) 
 	return nodes, nil
 }
 
-func (p *kubernetesProvisioner) GetNode(address string) (provision.Node, error) {
-	_, node, err := p.findNodeByAddress(address)
+func (p *kubernetesProvisioner) GetNode(ctx context.Context, address string) (provision.Node, error) {
+	_, node, err := p.findNodeByAddress(ctx, address)
 	if err != nil {
 		return nil, err
 	}
@@ -1043,8 +1070,8 @@ func appendKV(s, outSep, innSep string, m map[string]string) {
 	}
 }
 
-func (p *kubernetesProvisioner) AddNode(opts provision.AddNodeOptions) (err error) {
-	client, err := clusterForPool(opts.Pool)
+func (p *kubernetesProvisioner) AddNode(ctx context.Context, opts provision.AddNodeOptions) (err error) {
+	client, err := clusterForPool(ctx, opts.Pool)
 	if err != nil {
 		return err
 	}
@@ -1070,15 +1097,15 @@ func (p *kubernetesProvisioner) AddNode(opts provision.AddNodeOptions) (err erro
 			return errors.WithStack(err)
 		}
 	}
-	return p.internalNodeUpdate(provision.UpdateNodeOptions{
+	return p.internalNodeUpdate(ctx, provision.UpdateNodeOptions{
 		Address:  hostAddr,
 		Metadata: opts.Metadata,
 		Pool:     opts.Pool,
 	}, opts.IaaSID)
 }
 
-func (p *kubernetesProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
-	client, nodeWrapper, err := p.findNodeByAddress(opts.Address)
+func (p *kubernetesProvisioner) RemoveNode(ctx context.Context, opts provision.RemoveNodeOptions) error {
+	client, nodeWrapper, err := p.findNodeByAddress(ctx, opts.Address)
 	if err != nil {
 		return err
 	}
@@ -1114,16 +1141,16 @@ func (p *kubernetesProvisioner) RemoveNode(opts provision.RemoveNodeOptions) err
 	return nil
 }
 
-func (p *kubernetesProvisioner) NodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, error) {
-	return node.FindNodeByAddrs(p, nodeData.Addrs)
+func (p *kubernetesProvisioner) NodeForNodeData(ctx context.Context, nodeData provision.NodeStatusData) (provision.Node, error) {
+	return node.FindNodeByAddrs(ctx, p, nodeData.Addrs)
 }
 
-func (p *kubernetesProvisioner) findNodeByAddress(address string) (*ClusterClient, *kubernetesNodeWrapper, error) {
+func (p *kubernetesProvisioner) findNodeByAddress(ctx context.Context, address string) (*ClusterClient, *kubernetesNodeWrapper, error) {
 	var (
 		foundNode    *kubernetesNodeWrapper
 		foundCluster *ClusterClient
 	)
-	err := forEachCluster(func(c *ClusterClient) error {
+	err := forEachCluster(ctx, func(c *ClusterClient) error {
 		if foundNode != nil {
 			return nil
 		}
@@ -1154,12 +1181,12 @@ func (p *kubernetesProvisioner) findNodeByAddress(address string) (*ClusterClien
 	return foundCluster, foundNode, nil
 }
 
-func (p *kubernetesProvisioner) UpdateNode(opts provision.UpdateNodeOptions) error {
-	return p.internalNodeUpdate(opts, "")
+func (p *kubernetesProvisioner) UpdateNode(ctx context.Context, opts provision.UpdateNodeOptions) error {
+	return p.internalNodeUpdate(ctx, opts, "")
 }
 
-func (p *kubernetesProvisioner) internalNodeUpdate(opts provision.UpdateNodeOptions, iaasID string) error {
-	client, nodeWrapper, err := p.findNodeByAddress(opts.Address)
+func (p *kubernetesProvisioner) internalNodeUpdate(ctx context.Context, opts provision.UpdateNodeOptions, iaasID string) error {
+	client, nodeWrapper, err := p.findNodeByAddress(ctx, opts.Address)
 	if err != nil {
 		return err
 	}
@@ -1195,13 +1222,13 @@ func (p *kubernetesProvisioner) internalNodeUpdate(opts provision.UpdateNodeOpti
 	return errors.WithStack(err)
 }
 
-func (p *kubernetesProvisioner) Deploy(args provision.DeployArgs) (string, error) {
-	client, err := clusterForPool(args.App.GetPool())
+func (p *kubernetesProvisioner) Deploy(ctx context.Context, args provision.DeployArgs) (string, error) {
+	client, err := clusterForPool(ctx, args.App.GetPool())
 	if err != nil {
 		return "", err
 	}
 
-	if err = ensureAppCustomResourceSynced(client, args.App); err != nil {
+	if err = ensureAppCustomResourceSynced(ctx, client, args.App); err != nil {
 		return "", err
 	}
 	if args.Version.VersionInfo().DeployImage == "" {
@@ -1221,9 +1248,7 @@ func (p *kubernetesProvisioner) Deploy(args provision.DeployArgs) (string, error
 			attachInput:       strings.NewReader("."),
 			inputFile:         "/dev/null",
 		}
-		ctx, cancel := args.Event.CancelableContext(context.Background())
 		err = createDeployPod(ctx, params)
-		cancel()
 		if err != nil {
 			return "", err
 		}
@@ -1236,31 +1261,31 @@ func (p *kubernetesProvisioner) Deploy(args provision.DeployArgs) (string, error
 		client: client,
 		writer: args.Event,
 	}
-	var oldVersion appTypes.AppVersion
+	var oldVersionNumber int
 	if !args.PreserveVersions {
-		oldVersion, err = baseVersionForApp(client, args.App)
+		oldVersionNumber, err = baseVersionForApp(ctx, client, args.App)
 		if err != nil {
 			return "", err
 		}
 	}
-	err = servicecommon.RunServicePipeline(manager, oldVersion, args, nil)
+	err = servicecommon.RunServicePipeline(ctx, manager, oldVersionNumber, args, nil)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
-	err = ensureAppCustomResourceSynced(client, args.App)
+	err = ensureAppCustomResourceSynced(ctx, client, args.App)
 	if err != nil {
 		return "", err
 	}
 	return args.Version.VersionInfo().DeployImage, nil
 }
 
-func (p *kubernetesProvisioner) UpgradeNodeContainer(name string, pool string, writer io.Writer) error {
+func (p *kubernetesProvisioner) UpgradeNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
 	m := nodeContainerManager{}
 	return servicecommon.UpgradeNodeContainer(&m, name, pool, writer)
 }
 
-func (p *kubernetesProvisioner) RemoveNodeContainer(name string, pool string, writer io.Writer) error {
-	err := forEachCluster(func(cluster *ClusterClient) error {
+func (p *kubernetesProvisioner) RemoveNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
+	err := forEachCluster(ctx, func(cluster *ClusterClient) error {
 		return cleanupDaemonSet(cluster, name, pool)
 	})
 	if err == provTypes.ErrNoCluster {
@@ -1269,8 +1294,8 @@ func (p *kubernetesProvisioner) RemoveNodeContainer(name string, pool string, wr
 	return err
 }
 
-func (p *kubernetesProvisioner) ExecuteCommand(opts provision.ExecOptions) error {
-	client, err := clusterForPool(opts.App.GetPool())
+func (p *kubernetesProvisioner) ExecuteCommand(ctx context.Context, opts provision.ExecOptions) error {
+	client, err := clusterForPool(ctx, opts.App.GetPool())
 	if err != nil {
 		return err
 	}
@@ -1295,7 +1320,7 @@ func (p *kubernetesProvisioner) ExecuteCommand(opts provision.ExecOptions) error
 		tty:      opts.Stdin != nil,
 	}
 	if len(opts.Units) == 0 {
-		return runIsolatedCmdPod(context.TODO(), client, eOpts)
+		return runIsolatedCmdPod(ctx, client, eOpts)
 	}
 	for _, u := range opts.Units {
 		eOpts.unit = u
@@ -1309,7 +1334,7 @@ func (p *kubernetesProvisioner) ExecuteCommand(opts provision.ExecOptions) error
 
 func runIsolatedCmdPod(ctx context.Context, client *ClusterClient, opts execOpts) error {
 	baseName := execCommandPodNameForApp(opts.app)
-	labels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	labels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: opts.app,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			Prefix:        tsuruLabelPrefix,
@@ -1322,7 +1347,7 @@ func runIsolatedCmdPod(ctx context.Context, client *ClusterClient, opts execOpts
 	}
 	var version appTypes.AppVersion
 	if opts.image == "" {
-		version, err = servicemanager.AppVersion.LatestSuccessfulVersion(opts.app)
+		version, err = servicemanager.AppVersion.LatestSuccessfulVersion(ctx, opts.app)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -1350,7 +1375,7 @@ func runIsolatedCmdPod(ctx context.Context, client *ClusterClient, opts execOpts
 }
 
 func (p *kubernetesProvisioner) StartupMessage() (string, error) {
-	clusters, err := allClusters()
+	clusters, err := allClusters(context.TODO())
 	if err != nil {
 		if err == provTypes.ErrNoCluster {
 			return "", nil
@@ -1377,31 +1402,31 @@ func (p *kubernetesProvisioner) StartupMessage() (string, error) {
 	return out, nil
 }
 
-func (p *kubernetesProvisioner) DeleteVolume(volumeName, pool string) error {
-	client, err := clusterForPool(pool)
+func (p *kubernetesProvisioner) DeleteVolume(ctx context.Context, volumeName, pool string) error {
+	client, err := clusterForPool(ctx, pool)
 	if err != nil {
 		return err
 	}
 	return deleteVolume(client, volumeName)
 }
 
-func (p *kubernetesProvisioner) IsVolumeProvisioned(volumeName, pool string) (bool, error) {
-	client, err := clusterForPool(pool)
+func (p *kubernetesProvisioner) IsVolumeProvisioned(ctx context.Context, volumeName, pool string) (bool, error) {
+	client, err := clusterForPool(ctx, pool)
 	if err != nil {
 		return false, err
 	}
 	return volumeExists(client, volumeName)
 }
 
-func (p *kubernetesProvisioner) UpdateApp(old, new provision.App, w io.Writer) error {
+func (p *kubernetesProvisioner) UpdateApp(ctx context.Context, old, new provision.App, w io.Writer) error {
 	if old.GetPool() == new.GetPool() {
 		return nil
 	}
-	client, err := clusterForPool(old.GetPool())
+	client, err := clusterForPool(ctx, old.GetPool())
 	if err != nil {
 		return err
 	}
-	newClient, err := clusterForPool(new.GetPool())
+	newClient, err := clusterForPool(ctx, new.GetPool())
 	if err != nil {
 		return err
 	}
@@ -1417,7 +1442,7 @@ func (p *kubernetesProvisioner) UpdateApp(old, new provision.App, w io.Writer) e
 			return fmt.Errorf("can't change the pool of an app with binded volumes")
 		}
 	}
-	versions, err := versionsForAppProcess(client, old, "")
+	versions, err := versionsForAppProcess(ctx, client, old, "")
 	if err != nil {
 		return err
 	}
@@ -1435,7 +1460,7 @@ func (p *kubernetesProvisioner) UpdateApp(old, new provision.App, w io.Writer) e
 			&rebuildAppRoutes,
 			&destroyOldApp,
 		}
-		return action.NewPipeline(actions...).Execute(params)
+		return action.NewPipeline(actions...).Execute(ctx, params)
 	}
 	// same cluster and it is not configured with per-pool-namespace, nothing to do.
 	if sameNamespace {
@@ -1447,11 +1472,11 @@ func (p *kubernetesProvisioner) UpdateApp(old, new provision.App, w io.Writer) e
 		&rebuildAppRoutes,
 		&removeOldAppResources,
 	}
-	return action.NewPipeline(actions...).Execute(params)
+	return action.NewPipeline(actions...).Execute(ctx, params)
 }
 
 func (p *kubernetesProvisioner) Shutdown(ctx context.Context) error {
-	err := forEachCluster(func(client *ClusterClient) error {
+	err := forEachCluster(ctx, func(client *ClusterClient) error {
 		stopClusterController(p, client)
 		return nil
 	})
@@ -1461,12 +1486,12 @@ func (p *kubernetesProvisioner) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func ensureAppCustomResourceSynced(client *ClusterClient, a provision.App) error {
-	_, err := loadAndEnsureAppCustomResourceSynced(client, a)
+func ensureAppCustomResourceSynced(ctx context.Context, client *ClusterClient, a provision.App) error {
+	_, err := loadAndEnsureAppCustomResourceSynced(ctx, client, a)
 	return err
 }
 
-func loadAndEnsureAppCustomResourceSynced(client *ClusterClient, a provision.App) (*tsuruv1.App, error) {
+func loadAndEnsureAppCustomResourceSynced(ctx context.Context, client *ClusterClient, a provision.App) (*tsuruv1.App, error) {
 	err := ensureNamespace(client, client.Namespace())
 	if err != nil {
 		return nil, err
@@ -1486,7 +1511,7 @@ func loadAndEnsureAppCustomResourceSynced(client *ClusterClient, a provision.App
 	}
 	appCRD.Spec.ServiceAccountName = serviceAccountNameForApp(a)
 
-	deploys, err := allDeploymentsForApp(client, a)
+	deploys, err := allDeploymentsForApp(ctx, client, a)
 	if err != nil {
 		return nil, err
 	}
@@ -1494,7 +1519,7 @@ func loadAndEnsureAppCustomResourceSynced(client *ClusterClient, a provision.App
 		return deploys[i].Name < deploys[j].Name
 	})
 
-	svcs, err := allServicesForApp(client, a)
+	svcs, err := allServicesForApp(ctx, client, a)
 	if err != nil {
 		return nil, err
 	}
@@ -1519,7 +1544,7 @@ func loadAndEnsureAppCustomResourceSynced(client *ClusterClient, a provision.App
 	appCRD.Spec.Services = services
 	appCRD.Spec.Deployments = deployments
 
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(a)
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, a)
 	if err != nil && err != appTypes.ErrNoVersionsAvailable {
 		return nil, err
 	}
@@ -1690,12 +1715,12 @@ func (p *kubernetesProvisioner) HandlesHC() bool {
 	return true
 }
 
-func (p *kubernetesProvisioner) ToggleRoutable(a provision.App, version appTypes.AppVersion, isRoutable bool) error {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) ToggleRoutable(ctx context.Context, a provision.App, version appTypes.AppVersion, isRoutable bool) error {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
-	depsData, err := deploymentsDataForApp(client, a)
+	depsData, err := deploymentsDataForApp(ctx, client, a)
 	if err != nil {
 		return err
 	}
@@ -1709,7 +1734,7 @@ func (p *kubernetesProvisioner) ToggleRoutable(a provision.App, version appTypes
 			return err
 		}
 	}
-	return nil
+	return ensureAutoScale(ctx, client, a, "")
 }
 
 func toggleRoutableDeployment(client *ClusterClient, version int, dep *appsv1.Deployment, isRoutable bool) (err error) {
@@ -1717,8 +1742,8 @@ func toggleRoutableDeployment(client *ClusterClient, version int, dep *appsv1.De
 	ls.ToggleIsRoutable(isRoutable)
 	ls.SetVersion(version)
 	dep.Spec.Paused = true
-	dep.ObjectMeta.Labels = ls.ToLabels()
-	dep.Spec.Template.ObjectMeta.Labels = ls.WithoutAppReplicas().ToLabels()
+	dep.ObjectMeta.Labels = ls.WithoutVersion().ToLabels()
+	dep.Spec.Template.ObjectMeta.Labels = ls.ToLabels()
 	_, err = client.AppsV1().Deployments(dep.Namespace).Update(dep)
 	if err != nil {
 		return errors.WithStack(err)
@@ -1773,12 +1798,12 @@ func toggleRoutableDeployment(client *ClusterClient, version int, dep *appsv1.De
 	return nil
 }
 
-func (p *kubernetesProvisioner) DeployedVersions(a provision.App) ([]int, error) {
-	client, err := clusterForPool(a.GetPool())
+func (p *kubernetesProvisioner) DeployedVersions(ctx context.Context, a provision.App) ([]int, error) {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return nil, err
 	}
-	deps, err := deploymentsDataForApp(client, a)
+	deps, err := deploymentsDataForApp(ctx, client, a)
 	if err != nil {
 		return nil, err
 	}

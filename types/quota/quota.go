@@ -5,6 +5,7 @@
 package quota
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -21,18 +22,26 @@ func (q *Quota) IsUnlimited() bool {
 	return -1 == q.Limit
 }
 
+type QuotaItem interface {
+	GetName() string
+}
+
+type QuotaItemInUse interface {
+	QuotaItem
+	GetQuotaInUse() (int, error)
+}
+
 type QuotaService interface {
-	Inc(name string, delta int) error
-	Set(name string, quantity int) error
-	SetLimit(name string, limit int) error
-	Get(name string) (*Quota, error)
+	Inc(ctx context.Context, item QuotaItem, delta int) error
+	Set(ctx context.Context, item QuotaItem, quantity int) error
+	SetLimit(ctx context.Context, item QuotaItem, limit int) error
+	Get(ctx context.Context, item QuotaItem) (*Quota, error)
 }
 
 type QuotaStorage interface {
-	Inc(name string, delta int) error
-	SetLimit(name string, limit int) error
-	Get(name string) (*Quota, error)
-	Set(name string, quantity int) error
+	SetLimit(ctx context.Context, name string, limit int) error
+	Get(ctx context.Context, name string) (*Quota, error)
+	Set(ctx context.Context, name string, quantity int) error
 }
 
 type QuotaExceededError struct {

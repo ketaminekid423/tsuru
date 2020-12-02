@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -321,7 +322,7 @@ var provisionAddUnitsToHost = action.Action{
 		if err := checkCanceled(args.event); err != nil {
 			return nil, err
 		}
-		containers, err := addContainersWithHost(&args)
+		containers, err := addContainersWithHost(ctx.Context, &args)
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +431,7 @@ var bindAndHealthcheck = action.Action{
 
 type inRouterFn func(router.Router) error
 
-func runInRouters(app provision.App, fn inRouterFn, rollback inRouterFn) (err error) {
+func runInRouters(ctx context.Context, app provision.App, fn inRouterFn, rollback inRouterFn) (err error) {
 	var toRollback []router.Router
 	defer func() {
 		if err == nil || rollback == nil {
@@ -444,7 +445,7 @@ func runInRouters(app provision.App, fn inRouterFn, rollback inRouterFn) (err er
 		}
 	}()
 	for _, appRouter := range app.GetRouters() {
-		r, err := router.Get(appRouter.Name)
+		r, err := router.Get(ctx, appRouter.Name)
 		if err != nil {
 			return err
 		}
@@ -489,10 +490,10 @@ var addNewRoutes = action.Action{
 		if len(routesToAdd) == 0 {
 			return newContainers, nil
 		}
-		err = runInRouters(args.app, func(r router.Router) error {
-			return r.AddRoutes(args.app.GetName(), routesToAdd)
+		err = runInRouters(ctx.Context, args.app, func(r router.Router) error {
+			return r.AddRoutes(ctx.Context, args.app.GetName(), routesToAdd)
 		}, func(r router.Router) error {
-			return r.RemoveRoutes(args.app.GetName(), routesToAdd)
+			return r.RemoveRoutes(ctx.Context, args.app.GetName(), routesToAdd)
 		})
 		if err != nil {
 			return nil, err
@@ -521,8 +522,8 @@ var addNewRoutes = action.Action{
 		if len(routesToRemove) == 0 {
 			return
 		}
-		err := runInRouters(args.app, func(r router.Router) error {
-			return r.RemoveRoutes(args.app.GetName(), routesToRemove)
+		err := runInRouters(ctx.Context, args.app, func(r router.Router) error {
+			return r.RemoveRoutes(ctx.Context, args.app.GetName(), routesToRemove)
 		}, nil)
 		if err != nil {
 			log.Errorf("[add-new-routes:Backward] Error removing route for [%v]: %s", routesToRemove, err)
@@ -563,19 +564,19 @@ var setRouterHealthcheck = action.Action{
 			msg = fmt.Sprintf("%s, Body: %s", msg, newHCData.Body)
 		}
 		fmt.Fprintf(writer, "\n---- Setting router healthcheck (%s) ----\n", msg)
-		err = runInRouters(args.app, func(r router.Router) error {
+		err = runInRouters(ctx.Context, args.app, func(r router.Router) error {
 			hcRouter, ok := r.(router.CustomHealthcheckRouter)
 			if !ok {
 				return nil
 			}
-			return hcRouter.SetHealthcheck(args.app.GetName(), newHCData)
+			return hcRouter.SetHealthcheck(ctx.Context, args.app.GetName(), newHCData)
 		}, func(r router.Router) error {
 			hcRouter, ok := r.(router.CustomHealthcheckRouter)
 			if !ok {
 				return nil
 			}
 			var oldVersion appTypes.AppVersion
-			oldVersion, err = servicemanager.AppVersion.LatestSuccessfulVersion(args.app)
+			oldVersion, err = servicemanager.AppVersion.LatestSuccessfulVersion(ctx.Context, args.app)
 			if err != nil {
 				if err == appTypes.ErrNoVersionsAvailable {
 					return nil
@@ -586,14 +587,14 @@ var setRouterHealthcheck = action.Action{
 			if err != nil {
 				return err
 			}
-			return hcRouter.SetHealthcheck(args.app.GetName(), yamlData.ToRouterHC())
+			return hcRouter.SetHealthcheck(ctx.Context, args.app.GetName(), yamlData.ToRouterHC())
 		})
 		return newContainers, err
 	},
 	Backward: func(ctx action.BWContext) {
 		args := ctx.Params[0].(changeUnitsPipelineArgs)
 		var yamlData provTypes.TsuruYamlData
-		oldVersion, err := servicemanager.AppVersion.LatestSuccessfulVersion(args.app)
+		oldVersion, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx.Context, args.app)
 		if err != nil && err != appTypes.ErrNoVersionsAvailable {
 			log.Errorf("[set-router-healthcheck:Backward] Error getting old version: %s", err)
 			return
@@ -606,12 +607,12 @@ var setRouterHealthcheck = action.Action{
 			}
 		}
 		hcData := yamlData.ToRouterHC()
-		err = runInRouters(args.app, func(r router.Router) error {
+		err = runInRouters(ctx.Context, args.app, func(r router.Router) error {
 			hcRouter, ok := r.(router.CustomHealthcheckRouter)
 			if !ok {
 				return nil
 			}
-			return hcRouter.SetHealthcheck(args.app.GetName(), hcData)
+			return hcRouter.SetHealthcheck(ctx.Context, args.app.GetName(), hcData)
 		}, nil)
 		if err != nil {
 			log.Errorf("[set-router-healthcheck:Backward] Error setting healthcheck: %s", err)
@@ -643,7 +644,7 @@ var removeOldRoutes = action.Action{
 		if len(args.toRemove) > 0 {
 			fmt.Fprintf(writer, "\n---- Removing routes from old units ----\n")
 		}
-		oldVersion, err := servicemanager.AppVersion.LatestSuccessfulVersion(args.app)
+		oldVersion, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx.Context, args.app)
 		if err != nil && err != appTypes.ErrNoVersionsAvailable {
 			log.Errorf("[WARNING] cannot get the old version for route removal: %s", err)
 			return
@@ -669,13 +670,13 @@ var removeOldRoutes = action.Action{
 		if len(routesToRemove) == 0 {
 			return result, nil
 		}
-		err = runInRouters(args.app, func(r router.Router) error {
-			return r.RemoveRoutes(args.app.GetName(), routesToRemove)
+		err = runInRouters(ctx.Context, args.app, func(r router.Router) error {
+			return r.RemoveRoutes(ctx.Context, args.app.GetName(), routesToRemove)
 		}, func(r router.Router) error {
 			if args.appDestroy {
 				return nil
 			}
-			return r.AddRoutes(args.app.GetName(), routesToRemove)
+			return r.AddRoutes(ctx.Context, args.app.GetName(), routesToRemove)
 		})
 		if err != nil {
 			return nil, err
@@ -703,8 +704,8 @@ var removeOldRoutes = action.Action{
 		if len(routesToAdd) == 0 {
 			return
 		}
-		err := runInRouters(args.app, func(r router.Router) error {
-			return r.AddRoutes(args.app.GetName(), routesToAdd)
+		err := runInRouters(ctx.Context, args.app, func(r router.Router) error {
+			return r.AddRoutes(ctx.Context, args.app.GetName(), routesToAdd)
 		}, nil)
 		if err != nil {
 			log.Errorf("[remove-old-routes:Backward] Error adding back route for [%v]: %s", routesToAdd, err)

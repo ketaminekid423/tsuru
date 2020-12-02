@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,6 @@ import (
 	"github.com/tsuru/tsuru/router/routertest"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	provTypes "github.com/tsuru/tsuru/types/provision"
-	"github.com/tsuru/tsuru/types/quota"
 )
 
 var (
@@ -35,12 +35,20 @@ var (
 	errNotProvisioned         = &provision.Error{Reason: "App is not provisioned."}
 	uniqueIpCounter     int32 = 0
 
-	_ provision.NodeProvisioner      = &FakeProvisioner{}
-	_ provision.InterAppProvisioner  = &FakeProvisioner{}
-	_ provision.UpdatableProvisioner = &FakeProvisioner{}
-	_ provision.Provisioner          = &FakeProvisioner{}
-	_ provision.App                  = &FakeApp{}
-	_ bind.App                       = &FakeApp{}
+	_ provision.Provisioner              = &FakeProvisioner{}
+	_ provision.NodeProvisioner          = &FakeProvisioner{}
+	_ provision.NodeContainerProvisioner = &FakeProvisioner{}
+	_ provision.InterAppProvisioner      = &FakeProvisioner{}
+	_ provision.UpdatableProvisioner     = &FakeProvisioner{}
+	_ provision.Provisioner              = &FakeProvisioner{}
+	_ provision.LogsProvisioner          = &FakeProvisioner{}
+	_ provision.VolumeProvisioner        = &FakeProvisioner{}
+	_ provision.SleepableProvisioner     = &FakeProvisioner{}
+	_ provision.AppFilterProvisioner     = &FakeProvisioner{}
+	_ provision.ExecutableProvisioner    = &FakeProvisioner{}
+	_ provision.NodeRebalanceProvisioner = &FakeProvisioner{}
+	_ provision.App                      = &FakeApp{}
+	_ bind.App                           = &FakeApp{}
 )
 
 func init() {
@@ -52,31 +60,33 @@ func init() {
 
 // Fake implementation for provision.App.
 type FakeApp struct {
-	name            string
-	uuid            string
-	cname           []string
-	IP              string
-	platform        string
-	platformVersion string
-	units           []provision.Unit
-	logs            []string
-	logMut          sync.Mutex
-	Commands        []string
-	Memory          int64
-	Swap            int64
-	CpuShare        int
-	commMut         sync.Mutex
-	Deploys         uint
-	env             map[string]bind.EnvVar
-	bindCalls       []*provision.Unit
-	bindLock        sync.Mutex
-	serviceEnvs     []bind.ServiceEnvVar
-	serviceLock     sync.Mutex
-	Pool            string
-	UpdatePlatform  bool
-	TeamOwner       string
-	Teams           []string
-	Quota           quota.Quota
+	name              string
+	uuid              string
+	cname             []string
+	IP                string
+	platform          string
+	platformVersion   string
+	units             []provision.Unit
+	logs              []string
+	logMut            sync.Mutex
+	Commands          []string
+	Memory            int64
+	Swap              int64
+	CpuShare          int
+	MilliCPU          int
+	commMut           sync.Mutex
+	Deploys           uint
+	env               map[string]bind.EnvVar
+	bindCalls         []*provision.Unit
+	bindLock          sync.Mutex
+	serviceEnvs       []bind.ServiceEnvVar
+	serviceLock       sync.Mutex
+	Pool              string
+	UpdatePlatform    bool
+	TeamOwner         string
+	Teams             []string
+	Tags              []string
+	InternalAddresses []provision.AppInternalAddress
 }
 
 func NewFakeApp(name, platform string, units int) *FakeApp {
@@ -90,10 +100,9 @@ func NewFakeAppWithPool(name, platform, pool string, units int) *FakeApp {
 		platform:        repo,
 		platformVersion: version,
 		units:           make([]provision.Unit, units),
-		Quota:           quota.UnlimitedQuota,
 		Pool:            pool,
 	}
-	routertest.FakeRouter.AddBackend(&app)
+	routertest.FakeRouter.AddBackend(context.TODO(), &app)
 	namefmt := "%s-%d"
 	for i := 0; i < units; i++ {
 		val := atomic.AddInt32(&uniqueIpCounter, 1)
@@ -108,6 +117,10 @@ func NewFakeAppWithPool(name, platform, pool string, units int) *FakeApp {
 		}
 	}
 	return &app
+}
+
+func (a *FakeApp) GetMilliCPU() int {
+	return a.MilliCPU
 }
 
 func (a *FakeApp) GetMemory() int64 {
@@ -160,21 +173,6 @@ func (a *FakeApp) UnbindUnit(unit *provision.Unit) error {
 	length := len(a.bindCalls)
 	a.bindCalls[index] = a.bindCalls[length-1]
 	a.bindCalls = a.bindCalls[:length-1]
-	return nil
-}
-
-func (a *FakeApp) GetQuota() quota.Quota {
-	return a.Quota
-}
-
-func (a *FakeApp) SetQuotaInUse(inUse int) error {
-	if !a.Quota.IsUnlimited() && inUse > a.Quota.Limit {
-		return &quota.QuotaExceededError{
-			Requested: uint(inUse),
-			Available: uint(a.Quota.Limit),
-		}
-	}
-	a.Quota.InUse = inUse
 	return nil
 }
 
@@ -344,11 +342,23 @@ func (app *FakeApp) GetRouters() []appTypes.AppRouter {
 }
 
 func (app *FakeApp) GetAddresses() ([]string, error) {
-	addr, err := routertest.FakeRouter.Addr(app.GetName())
+	addr, err := routertest.FakeRouter.Addr(context.TODO(), app.GetName())
 	if err != nil {
 		return nil, err
 	}
 	return []string{addr}, nil
+}
+
+func (app *FakeApp) GetInternalAddresses(ctx context.Context) ([]string, error) {
+	var addresses []string
+	for _, addr := range app.InternalAddresses {
+		addresses = append(addresses, fmt.Sprintf("%s://%s:%d", strings.ToLower(addr.Protocol), addr.Domain, addr.Port))
+	}
+	return addresses, nil
+}
+
+func (app *FakeApp) ListTags() []string {
+	return app.Tags
 }
 
 type Cmd struct {
@@ -365,6 +375,7 @@ type failure struct {
 // Fake implementation for provision.Provisioner.
 type FakeProvisioner struct {
 	Name           string
+	LogsEnabled    bool
 	outputs        chan []byte
 	failures       chan failure
 	apps           map[string]provisionedApp
@@ -472,7 +483,7 @@ func (n *FakeNode) SetHealth(failures int, hasSuccess bool) {
 	n.hasSuccess = hasSuccess
 }
 
-func (p *FakeProvisioner) AddNode(opts provision.AddNodeOptions) error {
+func (p *FakeProvisioner) AddNode(ctx context.Context, opts provision.AddNodeOptions) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	if err := p.getError("AddNode"); err != nil {
@@ -499,7 +510,7 @@ func (p *FakeProvisioner) AddNode(opts provision.AddNodeOptions) error {
 	return nil
 }
 
-func (p *FakeProvisioner) GetNode(address string) (provision.Node, error) {
+func (p *FakeProvisioner) GetNode(ctx context.Context, address string) (provision.Node, error) {
 	p.mut.RLock()
 	defer p.mut.RUnlock()
 	if err := p.getError("GetNode"); err != nil {
@@ -511,7 +522,7 @@ func (p *FakeProvisioner) GetNode(address string) (provision.Node, error) {
 	return nil, provision.ErrNodeNotFound
 }
 
-func (p *FakeProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
+func (p *FakeProvisioner) RemoveNode(ctx context.Context, opts provision.RemoveNodeOptions) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	if err := p.getError("RemoveNode"); err != nil {
@@ -534,7 +545,7 @@ func (p *FakeProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
 	return nil
 }
 
-func (p *FakeProvisioner) UpdateNode(opts provision.UpdateNodeOptions) error {
+func (p *FakeProvisioner) UpdateNode(ctx context.Context, opts provision.UpdateNodeOptions) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	if err := p.getError("UpdateNode"); err != nil {
@@ -566,7 +577,7 @@ func (l nodeList) Len() int           { return len(l) }
 func (l nodeList) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
 func (l nodeList) Less(i, j int) bool { return l[i].Address() < l[j].Address() }
 
-func (p *FakeProvisioner) ListNodes(addressFilter []string) ([]provision.Node, error) {
+func (p *FakeProvisioner) ListNodes(ctx context.Context, addressFilter []string) ([]provision.Node, error) {
 	p.mut.RLock()
 	defer p.mut.RUnlock()
 	if err := p.getError("ListNodes"); err != nil {
@@ -590,7 +601,7 @@ func (p *FakeProvisioner) ListNodes(addressFilter []string) ([]provision.Node, e
 	return result, nil
 }
 
-func (p *FakeProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) ([]provision.Node, error) {
+func (p *FakeProvisioner) ListNodesByFilter(ctx context.Context, filter *provTypes.NodeFilter) ([]provision.Node, error) {
 	p.mut.RLock()
 	defer p.mut.RUnlock()
 	if err := p.getError("ListNodesByFilter"); err != nil {
@@ -616,7 +627,7 @@ func (p *FakeProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) ([]pro
 	return result, nil
 }
 
-func (p *FakeProvisioner) NodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, error) {
+func (p *FakeProvisioner) NodeForNodeData(ctx context.Context, nodeData provision.NodeStatusData) (provision.Node, error) {
 	if err := p.getError("NodeForNodeData"); err != nil {
 		return nil, err
 	}
@@ -641,7 +652,7 @@ func (p *FakeProvisioner) NodeForNodeData(nodeData provision.NodeStatusData) (pr
 	return node, nil
 }
 
-func (p *FakeProvisioner) RebalanceNodes(opts provision.RebalanceNodesOptions) (bool, error) {
+func (p *FakeProvisioner) RebalanceNodes(ctx context.Context, opts provision.RebalanceNodesOptions) (bool, error) {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	return p.rebalanceNodesLocked(opts)
@@ -849,11 +860,11 @@ func (p *FakeProvisioner) Reset() {
 	}
 }
 
-func (p *FakeProvisioner) Swap(app1, app2 provision.App, cnameOnly bool) error {
-	return routertest.FakeRouter.Swap(app1.GetName(), app2.GetName(), cnameOnly)
+func (p *FakeProvisioner) Swap(ctx context.Context, app1, app2 provision.App, cnameOnly bool) error {
+	return routertest.FakeRouter.Swap(ctx, app1.GetName(), app2.GetName(), cnameOnly)
 }
 
-func (p *FakeProvisioner) Deploy(args provision.DeployArgs) (string, error) {
+func (p *FakeProvisioner) Deploy(ctx context.Context, args provision.DeployArgs) (string, error) {
 	if err := p.getError("Deploy"); err != nil {
 		return "", err
 	}
@@ -907,7 +918,7 @@ func (p *FakeProvisioner) CleanImage(appName, imgName string) error {
 	return nil
 }
 
-func (p *FakeProvisioner) Provision(app provision.App) error {
+func (p *FakeProvisioner) Provision(ctx context.Context, app provision.App) error {
 	if err := p.getError("Provision"); err != nil {
 		return err
 	}
@@ -926,7 +937,7 @@ func (p *FakeProvisioner) Provision(app provision.App) error {
 	return nil
 }
 
-func (p *FakeProvisioner) Restart(app provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
+func (p *FakeProvisioner) Restart(ctx context.Context, app provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
 	if err := p.getError("Restart"); err != nil {
 		return err
 	}
@@ -944,7 +955,7 @@ func (p *FakeProvisioner) Restart(app provision.App, process string, version app
 	return nil
 }
 
-func (p *FakeProvisioner) Start(app provision.App, process string, version appTypes.AppVersion) error {
+func (p *FakeProvisioner) Start(ctx context.Context, app provision.App, process string, version appTypes.AppVersion) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	pApp, ok := p.apps[app.GetName()]
@@ -956,7 +967,7 @@ func (p *FakeProvisioner) Start(app provision.App, process string, version appTy
 	return nil
 }
 
-func (p *FakeProvisioner) Destroy(app provision.App) error {
+func (p *FakeProvisioner) Destroy(ctx context.Context, app provision.App) error {
 	if err := p.getError("Destroy"); err != nil {
 		return err
 	}
@@ -969,7 +980,7 @@ func (p *FakeProvisioner) Destroy(app provision.App) error {
 	return nil
 }
 
-func (p *FakeProvisioner) AddUnits(app provision.App, n uint, process string, version appTypes.AppVersion, w io.Writer) error {
+func (p *FakeProvisioner) AddUnits(ctx context.Context, app provision.App, n uint, process string, version appTypes.AppVersion, w io.Writer) error {
 	_, err := p.AddUnitsToNode(app, n, process, w, "")
 	return err
 }
@@ -1020,7 +1031,7 @@ func (p *FakeProvisioner) AddUnitsToNode(app provision.App, n uint, process stri
 		pApp.units = append(pApp.units, unit)
 		pApp.unitLen++
 	}
-	err := routertest.FakeRouter.AddRoutes(name, addresses)
+	err := routertest.FakeRouter.AddRoutes(context.TODO(), name, addresses)
 	if err != nil {
 		return nil, err
 	}
@@ -1033,7 +1044,7 @@ func (p *FakeProvisioner) AddUnitsToNode(app provision.App, n uint, process stri
 	return result, nil
 }
 
-func (p *FakeProvisioner) RemoveUnits(app provision.App, n uint, process string, version appTypes.AppVersion, w io.Writer) error {
+func (p *FakeProvisioner) RemoveUnits(ctx context.Context, app provision.App, n uint, process string, version appTypes.AppVersion, w io.Writer) error {
 	if err := p.getError("RemoveUnits"); err != nil {
 		return err
 	}
@@ -1057,7 +1068,7 @@ func (p *FakeProvisioner) RemoveUnits(app provision.App, n uint, process string,
 		}
 		newUnits = append(newUnits, u)
 	}
-	err := routertest.FakeRouter.RemoveRoutes(app.GetName(), addresses)
+	err := routertest.FakeRouter.RemoveRoutes(ctx, app.GetName(), addresses)
 	if err != nil {
 		return err
 	}
@@ -1082,7 +1093,7 @@ func (p *FakeProvisioner) AddUnit(app provision.App, unit provision.Unit) {
 	p.apps[app.GetName()] = a
 }
 
-func (p *FakeProvisioner) Units(apps ...provision.App) ([]provision.Unit, error) {
+func (p *FakeProvisioner) Units(ctx context.Context, apps ...provision.App) ([]provision.Unit, error) {
 	if err := p.getError("Units"); err != nil {
 		return nil, err
 	}
@@ -1103,7 +1114,7 @@ func (p *FakeProvisioner) MockRoutableAddresses(app provision.App, addrs []appTy
 	p.apps[app.GetName()] = a
 }
 
-func (p *FakeProvisioner) RoutableAddresses(app provision.App) ([]appTypes.RoutableAddresses, error) {
+func (p *FakeProvisioner) RoutableAddresses(ctx context.Context, app provision.App) ([]appTypes.RoutableAddresses, error) {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	a := p.apps[app.GetName()]
@@ -1160,7 +1171,7 @@ func (p *FakeProvisioner) Addr(app provision.App) (string, error) {
 	if err := p.getError("Addr"); err != nil {
 		return "", err
 	}
-	return routertest.FakeRouter.Addr(app.GetName())
+	return routertest.FakeRouter.Addr(context.TODO(), app.GetName())
 }
 
 func (p *FakeProvisioner) SetCName(app provision.App, cname string) error {
@@ -1175,7 +1186,7 @@ func (p *FakeProvisioner) SetCName(app provision.App, cname string) error {
 	}
 	pApp.cnames = append(pApp.cnames, cname)
 	p.apps[app.GetName()] = pApp
-	return routertest.FakeRouter.SetCName(cname, app.GetName())
+	return routertest.FakeRouter.SetCName(context.TODO(), cname, app.GetName())
 }
 
 func (p *FakeProvisioner) UnsetCName(app provision.App, cname string) error {
@@ -1190,7 +1201,7 @@ func (p *FakeProvisioner) UnsetCName(app provision.App, cname string) error {
 	}
 	pApp.cnames = []string{}
 	p.apps[app.GetName()] = pApp
-	return routertest.FakeRouter.UnsetCName(cname, app.GetName())
+	return routertest.FakeRouter.UnsetCName(context.TODO(), cname, app.GetName())
 }
 
 func (p *FakeProvisioner) HasCName(app provision.App, cname string) bool {
@@ -1205,7 +1216,7 @@ func (p *FakeProvisioner) HasCName(app provision.App, cname string) bool {
 	return false
 }
 
-func (p *FakeProvisioner) Stop(app provision.App, process string, version appTypes.AppVersion) error {
+func (p *FakeProvisioner) Stop(ctx context.Context, app provision.App, process string, version appTypes.AppVersion) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	pApp, ok := p.apps[app.GetName()]
@@ -1221,7 +1232,7 @@ func (p *FakeProvisioner) Stop(app provision.App, process string, version appTyp
 	return nil
 }
 
-func (p *FakeProvisioner) Sleep(app provision.App, process string, version appTypes.AppVersion) error {
+func (p *FakeProvisioner) Sleep(ctx context.Context, app provision.App, process string, version appTypes.AppVersion) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	pApp, ok := p.apps[app.GetName()]
@@ -1237,7 +1248,7 @@ func (p *FakeProvisioner) Sleep(app provision.App, process string, version appTy
 	return nil
 }
 
-func (p *FakeProvisioner) RegisterUnit(a provision.App, unitId string, customData map[string]interface{}) error {
+func (p *FakeProvisioner) RegisterUnit(ctx context.Context, a provision.App, unitId string, customData map[string]interface{}) error {
 	p.mut.Lock()
 	defer p.mut.Unlock()
 	pa, ok := p.apps[a.GetName()]
@@ -1256,7 +1267,7 @@ func (p *FakeProvisioner) RegisterUnit(a provision.App, unitId string, customDat
 	return &provision.UnitNotFoundError{ID: unitId}
 }
 
-func (p *FakeProvisioner) ExecuteCommand(opts provision.ExecOptions) error {
+func (p *FakeProvisioner) ExecuteCommand(ctx context.Context, opts provision.ExecOptions) error {
 	p.execsMut.Lock()
 	defer p.execsMut.Unlock()
 	var err error
@@ -1296,10 +1307,10 @@ func (p *FakeProvisioner) ExecuteCommand(opts provision.ExecOptions) error {
 	return err
 }
 
-func (p *FakeProvisioner) FilterAppsByUnitStatus(apps []provision.App, status []string) ([]provision.App, error) {
+func (p *FakeProvisioner) FilterAppsByUnitStatus(ctx context.Context, apps []provision.App, status []string) ([]provision.App, error) {
 	filteredApps := []provision.App{}
 	for i := range apps {
-		units, _ := p.Units(apps[i])
+		units, _ := p.Units(ctx, apps[i])
 		for _, u := range units {
 			if stringInArray(u.Status.String(), status) {
 				filteredApps = append(filteredApps, apps[i])
@@ -1314,12 +1325,12 @@ func (p *FakeProvisioner) GetName() string {
 	return p.Name
 }
 
-func (p *FakeProvisioner) UpgradeNodeContainer(name string, pool string, writer io.Writer) error {
+func (p *FakeProvisioner) UpgradeNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
 	p.nodeContainers[name+"-"+pool]++
 	return nil
 }
 
-func (p *FakeProvisioner) RemoveNodeContainer(name string, pool string, writer io.Writer) error {
+func (p *FakeProvisioner) RemoveNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
 	p.nodeContainers[name+"-"+pool] = 0
 	return nil
 }
@@ -1328,15 +1339,15 @@ func (p *FakeProvisioner) HasNodeContainer(name string, pool string) bool {
 	return p.nodeContainers[name+"-"+pool] > 0
 }
 
-func (p *FakeProvisioner) DeleteVolume(volName, pool string) error {
+func (p *FakeProvisioner) DeleteVolume(ctx context.Context, volName, pool string) error {
 	return nil
 }
 
-func (p *FakeProvisioner) IsVolumeProvisioned(name, pool string) (bool, error) {
+func (p *FakeProvisioner) IsVolumeProvisioned(ctx context.Context, name, pool string) (bool, error) {
 	return false, nil
 }
 
-func (p *FakeProvisioner) UpdateApp(old, new provision.App, w io.Writer) error {
+func (p *FakeProvisioner) UpdateApp(ctx context.Context, old, new provision.App, w io.Writer) error {
 	provApp := p.apps[old.GetName()]
 	provApp.app = new
 	p.apps[old.GetName()] = provApp
@@ -1357,6 +1368,26 @@ func (p *FakeProvisioner) InternalAddresses(ctx context.Context, a provision.App
 		},
 	}, nil
 
+}
+
+func (p *FakeProvisioner) ListLogs(ctx context.Context, app appTypes.App, args appTypes.ListLogArgs) ([]appTypes.Applog, error) {
+	if !p.LogsEnabled {
+		return nil, provision.ErrLogsUnavailable
+	}
+	return []appTypes.Applog{
+		{
+			Message: "Fake message from provisioner",
+		},
+	}, nil
+}
+
+func (p *FakeProvisioner) WatchLogs(ctx context.Context, app appTypes.App, args appTypes.ListLogArgs) (appTypes.LogWatcher, error) {
+	if !p.LogsEnabled {
+		return nil, provision.ErrLogsUnavailable
+	}
+	watcher := appTypes.NewMockLogWatcher()
+	watcher.Enqueue(appTypes.Applog{Message: "Fake message from provisioner"})
+	return watcher, nil
 }
 
 func stringInArray(value string, array []string) bool {
@@ -1422,4 +1453,41 @@ type provisionedApp struct {
 	lastData  map[string]interface{}
 	image     string
 	mockAddrs []appTypes.RoutableAddresses
+}
+
+type AutoScaleProvisioner struct {
+	*FakeProvisioner
+	autoscales map[string][]provision.AutoScaleSpec
+}
+
+var _ provision.AutoScaleProvisioner = &AutoScaleProvisioner{}
+
+func (p *AutoScaleProvisioner) GetAutoScale(ctx context.Context, app provision.App) ([]provision.AutoScaleSpec, error) {
+	if p.autoscales == nil {
+		return nil, nil
+	}
+	return p.autoscales[app.GetName()], nil
+}
+
+func (p *AutoScaleProvisioner) SetAutoScale(ctx context.Context, app provision.App, spec provision.AutoScaleSpec) error {
+	if p.autoscales == nil {
+		p.autoscales = make(map[string][]provision.AutoScaleSpec)
+	}
+	p.autoscales[app.GetName()] = append(p.autoscales[app.GetName()], spec)
+	return nil
+}
+
+func (p *AutoScaleProvisioner) RemoveAutoScale(ctx context.Context, app provision.App, process string) error {
+	if p.autoscales == nil {
+		return nil
+	}
+	previous := p.autoscales[app.GetName()]
+	p.autoscales[app.GetName()] = nil
+	for _, spec := range previous {
+		if spec.Process == process {
+			continue
+		}
+		p.autoscales[app.GetName()] = append(p.autoscales[app.GetName()], spec)
+	}
+	return nil
 }

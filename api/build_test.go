@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -39,7 +40,6 @@ import (
 
 type BuildSuite struct {
 	conn        *db.Storage
-	logConn     *db.LogStorage
 	token       auth.Token
 	user        *auth.User
 	team        *authTypes.Team
@@ -54,7 +54,7 @@ var _ = check.Suite(&BuildSuite{})
 func (s *BuildSuite) createUserAndTeam(c *check.C) {
 	user := &auth.User{Email: "whydidifall@thewho.com", Password: "123456"}
 	app.AuthScheme = nativeScheme
-	_, err := nativeScheme.Create(user)
+	_, err := nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	s.team = &authTypes.Team{Name: "tsuruteam"}
 	s.token = userWithPermission(c, permission.Permission{
@@ -86,18 +86,14 @@ func (s *BuildSuite) SetUpSuite(c *check.C) {
 	config.Set("repo-manager", "fake")
 	s.conn, err = db.Conn()
 	c.Assert(err, check.IsNil)
-	s.logConn, err = db.LogConn()
-	c.Assert(err, check.IsNil)
 	s.testServer = RunServer(true)
 }
 
 func (s *BuildSuite) TearDownSuite(c *check.C) {
 	config.Unset("docker:router")
 	pool.RemovePool("pool1")
-	s.conn.Apps().Database.DropDatabase()
-	s.logConn.AppLogCollection("myapp").Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
-	s.logConn.Close()
 	s.reset()
 }
 
@@ -112,11 +108,11 @@ func (s *BuildSuite) SetUpTest(c *check.C) {
 	c.Assert(err, check.IsNil)
 	s.createUserAndTeam(c)
 	opts := pool.AddPoolOptions{Name: "pool1", Default: true}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	s.user, err = auth.ConvertNewUser(s.token.User())
 	c.Assert(err, check.IsNil)
-	repository.Manager().CreateUser(s.user.Email)
+	repository.Manager().CreateUser(context.TODO(), s.user.Email)
 	config.Set("docker:router", "fake")
 	servicemock.SetMockService(&s.mockService)
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -146,7 +142,7 @@ func (s *BuildSuite) TestBuildHandler(c *check.C) {
 	s.builder.OnBuild = func(p provision.BuilderDeploy, app provision.App, evt *event.Event, opts *builder.BuildOpts) (appTypes.AppVersion, error) {
 		c.Assert(opts.ArchiveFile, check.NotNil)
 		c.Assert(opts.Tag, check.Equals, "mytag")
-		version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+		version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 			App:            app,
 			CustomBuildTag: opts.Tag,
 		})
@@ -161,7 +157,7 @@ func (s *BuildSuite) TestBuildHandler(c *check.C) {
 		Router:    "fake",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 
 	url := fmt.Sprintf("/apps/%s/build?tag=mytag", a.Name)
@@ -206,7 +202,7 @@ func (s *BuildSuite) TestBuildHandler(c *check.C) {
 func (s *BuildSuite) TestBuildArchiveURL(c *check.C) {
 	s.builder.OnBuild = func(p provision.BuilderDeploy, app provision.App, evt *event.Event, opts *builder.BuildOpts) (appTypes.AppVersion, error) {
 		c.Assert(opts.ArchiveURL, check.Equals, "http://something.tar.gz")
-		version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+		version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 			App:            app,
 			CustomBuildTag: opts.Tag,
 		})
@@ -221,7 +217,7 @@ func (s *BuildSuite) TestBuildArchiveURL(c *check.C) {
 		Router:    "fake",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/build", a.Name)
 	request, err := http.NewRequest(http.MethodPost, url, strings.NewReader("tag=mytag&archive-url=http://something.tar.gz"))
@@ -258,7 +254,7 @@ func (s *BuildSuite) TestBuildArchiveURL(c *check.C) {
 
 func (s *BuildSuite) TestBuildWithoutTag(c *check.C) {
 	a := app.App{Name: "otherapp", Platform: "python", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/build", a.Name)
 	request, err := http.NewRequest(http.MethodPost, url, strings.NewReader("archive-url=http://something.tar.gz"))

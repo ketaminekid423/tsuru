@@ -5,6 +5,7 @@
 package pool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -19,7 +20,9 @@ import (
 	"github.com/tsuru/tsuru/router"
 	"github.com/tsuru/tsuru/service"
 	"github.com/tsuru/tsuru/servicemanager"
+	"github.com/tsuru/tsuru/storage"
 	appTypes "github.com/tsuru/tsuru/types/app"
+	provisionTypes "github.com/tsuru/tsuru/types/provision"
 	"github.com/tsuru/tsuru/validation"
 )
 
@@ -39,6 +42,8 @@ type Pool struct {
 	Name        string `bson:"_id"`
 	Default     bool
 	Provisioner string
+
+	ctx context.Context
 }
 
 type AddPoolOptions struct {
@@ -113,7 +118,7 @@ func (p *Pool) GetDefaultRouter() (string, error) {
 	}
 	constraint := constraints[ConstraintTypeRouter]
 	if constraint == nil || len(constraint.Values) == 0 {
-		return router.Default()
+		return router.Default(p.ctx)
 	}
 	if constraint.Blacklist || strings.Contains(constraint.Values[0], "*") {
 		var allowed map[poolConstraintType][]string
@@ -124,9 +129,9 @@ func (p *Pool) GetDefaultRouter() (string, error) {
 		if len(allowed[ConstraintTypeRouter]) == 1 {
 			return allowed[ConstraintTypeRouter][0], nil
 		}
-		return router.Default()
+		return router.Default(p.ctx)
 	}
-	routers, err := routersNames()
+	routers, err := routersNames(p.ctx)
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +140,7 @@ func (p *Pool) GetDefaultRouter() (string, error) {
 			return r, nil
 		}
 	}
-	return router.Default()
+	return router.Default(p.ctx)
 }
 
 func (p *Pool) ValidateRouters(routers []appTypes.AppRouter) error {
@@ -158,19 +163,19 @@ func (p *Pool) ValidateRouters(routers []appTypes.AppRouter) error {
 }
 
 func (p *Pool) allowedValues() (map[poolConstraintType][]string, error) {
-	teams, err := teamsNames()
+	teams, err := teamsNames(p.ctx)
 	if err != nil {
 		return nil, err
 	}
-	routers, err := routersNames()
+	routers, err := routersNames(p.ctx)
 	if err != nil {
 		return nil, err
 	}
-	services, err := servicesNames()
+	services, err := servicesNames(p.ctx)
 	if err != nil {
 		return nil, err
 	}
-	plans, err := plansNames()
+	plans, err := plansNames(p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +202,8 @@ func (p *Pool) allowedValues() (map[poolConstraintType][]string, error) {
 	return resolved, nil
 }
 
-func routersNames() ([]string, error) {
-	routers, err := router.List()
+func routersNames(ctx context.Context) ([]string, error) {
+	routers, err := router.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +214,8 @@ func routersNames() ([]string, error) {
 	return names, nil
 }
 
-func teamsNames() ([]string, error) {
-	teams, err := servicemanager.Team.List()
+func teamsNames(ctx context.Context) ([]string, error) {
+	teams, err := servicemanager.Team.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +226,8 @@ func teamsNames() ([]string, error) {
 	return names, nil
 }
 
-func servicesNames() ([]string, error) {
-	services, err := service.GetServices()
+func servicesNames(ctx context.Context) ([]string, error) {
+	services, err := service.GetServices(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -233,8 +238,8 @@ func servicesNames() ([]string, error) {
 	return names, nil
 }
 
-func plansNames() ([]string, error) {
-	plans, err := servicemanager.Plan.List()
+func plansNames(ctx context.Context) ([]string, error) {
+	plans, err := servicemanager.Plan.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +282,7 @@ func (p *Pool) validate() error {
 	return nil
 }
 
-func AddPool(opts AddPoolOptions) error {
+func AddPool(ctx context.Context, opts AddPoolOptions) error {
 	pool := Pool{Name: opts.Name, Default: opts.Default, Provisioner: opts.Provisioner}
 	if err := pool.validate(); err != nil {
 		return err
@@ -288,7 +293,7 @@ func AddPool(opts AddPoolOptions) error {
 	}
 	defer conn.Close()
 	if opts.Default {
-		err = changeDefaultPool(opts.Force)
+		err = changeDefaultPool(ctx, opts.Force)
 		if err != nil {
 			return err
 		}
@@ -306,7 +311,7 @@ func AddPool(opts AddPoolOptions) error {
 	return nil
 }
 
-func RenamePoolTeam(oldName, newName string) error {
+func RenamePoolTeam(ctx context.Context, oldName, newName string) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err
@@ -323,13 +328,13 @@ func RenamePoolTeam(oldName, newName string) error {
 	return err
 }
 
-func changeDefaultPool(force bool) error {
+func changeDefaultPool(ctx context.Context, force bool) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	p, err := listPools(bson.M{"default": true})
+	p, err := listPools(ctx, bson.M{"default": true})
 	if err != nil {
 		return err
 	}
@@ -411,27 +416,27 @@ func RemoveTeamsFromPool(poolName string, teams []string) error {
 	return removePoolConstraint(poolName, ConstraintTypeTeam, teams...)
 }
 
-func ListPools(names ...string) ([]Pool, error) {
-	return listPools(bson.M{"_id": bson.M{"$in": names}})
+func ListPools(ctx context.Context, names ...string) ([]Pool, error) {
+	return listPools(ctx, bson.M{"_id": bson.M{"$in": names}})
 }
 
-func ListAllPools() ([]Pool, error) {
-	return listPools(nil)
+func ListAllPools(ctx context.Context) ([]Pool, error) {
+	return listPools(ctx, nil)
 }
 
-func ListPublicPools() ([]Pool, error) {
-	return getPoolsSatisfyConstraints(true, ConstraintTypeTeam, "*")
+func ListPublicPools(ctx context.Context) ([]Pool, error) {
+	return getPoolsSatisfyConstraints(ctx, true, ConstraintTypeTeam, "*")
 }
 
-func ListPossiblePools(teams []string) ([]Pool, error) {
-	return getPoolsSatisfyConstraints(false, ConstraintTypeTeam, teams...)
+func ListPossiblePools(ctx context.Context, teams []string) ([]Pool, error) {
+	return getPoolsSatisfyConstraints(ctx, false, ConstraintTypeTeam, teams...)
 }
 
-func ListPoolsForTeam(team string) ([]Pool, error) {
-	return getPoolsSatisfyConstraints(true, ConstraintTypeTeam, team)
+func ListPoolsForTeam(ctx context.Context, team string) ([]Pool, error) {
+	return getPoolsSatisfyConstraints(ctx, true, ConstraintTypeTeam, team)
 }
 
-func listPools(query bson.M) ([]Pool, error) {
+func listPools(ctx context.Context, query bson.M) ([]Pool, error) {
 	conn, err := db.Conn()
 	if err != nil {
 		return nil, err
@@ -445,12 +450,15 @@ func listPools(query bson.M) ([]Pool, error) {
 	return pools, nil
 }
 
-func GetProvisionerForPool(name string) (provision.Provisioner, error) {
+func GetProvisionerForPool(ctx context.Context, name string) (provision.Provisioner, error) {
+	if name == "" {
+		return provision.GetDefault()
+	}
 	prov := poolCache.Get(name)
 	if prov != nil {
 		return prov, nil
 	}
-	p, err := GetPoolByName(name)
+	p, err := GetPoolByName(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +471,7 @@ func GetProvisionerForPool(name string) (provision.Provisioner, error) {
 }
 
 // GetPoolByName finds a pool by name
-func GetPoolByName(name string) (*Pool, error) {
+func GetPoolByName(ctx context.Context, name string) (*Pool, error) {
 	conn, err := db.Conn()
 	if err != nil {
 		return nil, err
@@ -477,10 +485,11 @@ func GetPoolByName(name string) (*Pool, error) {
 		}
 		return nil, err
 	}
+	p.ctx = ctx
 	return &p, nil
 }
 
-func GetDefaultPool() (*Pool, error) {
+func GetDefaultPool(ctx context.Context) (*Pool, error) {
 	conn, err := db.Conn()
 	if err != nil {
 		return nil, err
@@ -494,21 +503,22 @@ func GetDefaultPool() (*Pool, error) {
 		}
 		return nil, err
 	}
+	pool.ctx = ctx
 	return &pool, nil
 }
 
-func PoolUpdate(name string, opts UpdatePoolOptions) error {
+func PoolUpdate(ctx context.Context, name string, opts UpdatePoolOptions) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	_, err = GetPoolByName(name)
+	_, err = GetPoolByName(ctx, name)
 	if err != nil {
 		return err
 	}
 	if opts.Default != nil && *opts.Default {
-		err = changeDefaultPool(opts.Force)
+		err = changeDefaultPool(ctx, opts.Force)
 		if err != nil {
 			return err
 		}
@@ -545,4 +555,37 @@ func exprAsGlobPattern(expr string) string {
 		parts[i] = regexp.QuoteMeta(parts[i])
 	}
 	return fmt.Sprintf("^%s$", strings.Join(parts, ".*"))
+}
+
+type poolService struct {
+	storage provisionTypes.PoolStorage
+}
+
+var _ provisionTypes.PoolService = &poolService{}
+
+func PoolStorage() (provisionTypes.PoolStorage, error) {
+	dbDriver, err := storage.GetCurrentDbDriver()
+	if err != nil {
+		dbDriver, err = storage.GetDefaultDbDriver()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dbDriver.PoolStorage, nil
+}
+
+func PoolService() (provisionTypes.PoolService, error) {
+	poolStorage, err := PoolStorage()
+	if err != nil {
+		return nil, err
+	}
+	return &poolService{storage: poolStorage}, nil
+}
+
+func (s *poolService) FindByName(ctx context.Context, name string) (*provisionTypes.Pool, error) {
+	return s.storage.FindByName(ctx, name)
+}
+
+func (s *poolService) List(ctx context.Context) ([]provisionTypes.Pool, error) {
+	return s.storage.FindAll(ctx)
 }

@@ -5,6 +5,7 @@
 package migrate
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -61,13 +62,13 @@ func (s *S) SetUpTest(c *check.C) {
 	nativeScheme := auth.ManagedScheme(native.NativeScheme{})
 	app.AuthScheme = nativeScheme
 	s.user = &auth.User{Email: "me@me.com", Password: "123456"}
-	_, err = nativeScheme.Create(s.user)
+	_, err = nativeScheme.Create(context.TODO(), s.user)
 	c.Assert(err, check.IsNil)
 	s.team = &authTypes.Team{Name: "angra"}
 	provision.DefaultProvisioner = "fake"
 	provisiontest.ProvisionerInstance.Reset()
 	opts := pool.AddPoolOptions{Name: "test1", Default: true}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
 		return []authTypes.Team{*s.team}, nil
@@ -95,7 +96,7 @@ func (s *S) TestMigrateRCEventsNoApp(c *check.C) {
 
 func (s *S) TestMigrateRCEventsWithApp(c *check.C) {
 	a := app.App{Name: "a1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	now := time.Unix(time.Now().Unix(), 0).UTC()
 	id := bson.NewObjectId()

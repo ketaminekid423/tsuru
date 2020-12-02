@@ -5,6 +5,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,16 +27,19 @@ import (
 )
 
 var (
-	ErrServiceInstanceNotFound   = errors.New("service instance not found")
-	ErrInvalidInstanceName       = errors.New("invalid service instance name")
-	ErrInstanceNameAlreadyExists = errors.New("instance name already exists.")
-	ErrAccessNotAllowed          = errors.New("user does not have access to this service instance")
-	ErrTeamMandatory             = errors.New("please specify the team that owns the service instance")
-	ErrAppAlreadyBound           = errors.New("app is already bound to this service instance")
-	ErrAppNotBound               = errors.New("app is not bound to this service instance")
-	ErrUnitNotBound              = errors.New("unit is not bound to this service instance")
-	ErrServiceInstanceBound      = errors.New("This service instance is bound to at least one app. Unbind them before removing it")
-	instanceNameRegexp           = regexp.MustCompile(`^[A-Za-z][-a-zA-Z0-9_]+$`)
+	ErrServiceInstanceNotFound                  = errors.New("service instance not found")
+	ErrInvalidInstanceName                      = errors.New("invalid service instance name")
+	ErrInstanceNameAlreadyExists                = errors.New("instance name already exists.")
+	ErrAccessNotAllowed                         = errors.New("user does not have access to this service instance")
+	ErrTeamMandatory                            = errors.New("please specify the team that owns the service instance")
+	ErrAppAlreadyBound                          = errors.New("app is already bound to this service instance")
+	ErrAppNotBound                              = errors.New("app is not bound to this service instance")
+	ErrUnitNotBound                             = errors.New("unit is not bound to this service instance")
+	ErrServiceInstanceBound                     = errors.New("This service instance is bound to at least one app. Unbind them before removing it")
+	ErrMultiClusterServiceRequiresPool          = errors.New("multi-cluster service instance requires a pool")
+	ErrMultiClusterPoolDoesNotMatch             = errors.New("pools between app and multi-cluster service instance does not match")
+	ErrRegularServiceInstanceCannotBelongToPool = errors.New("regular (non-multi-cluster) service instance cannot belong to a pool")
+	instanceNameRegexp                          = regexp.MustCompile(`^[A-Za-z][-a-zA-Z0-9_]+$`)
 )
 
 type ServiceInstance struct {
@@ -50,9 +54,21 @@ type ServiceInstance struct {
 	Description string                 `json:"description"`
 	Tags        []string               `json:"tags"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
+	// Pool is the pool name which the Service Instance should run into.
+	// This field is mandatory iff the parent Service is running in
+	// multi-cluster mode (see Service.IsMultiCluster field)
+	//
+	// NOTE: after the service instance is created, this field turns immutable.
+	Pool string `json:"pool,omitempty"`
 
 	// BrokerData stores data used by Instances provisioned by Brokers
 	BrokerData *BrokerInstanceData `json:"broker_data,omitempty" bson:"broker_data"`
+
+	// ForceRemove indicates whether service instance should be removed even the
+	// related call to service API fails.
+	ForceRemove bool `bson:"-" json:"-"`
+
+	ctx context.Context
 }
 
 type BrokerInstanceData struct {
@@ -89,17 +105,24 @@ func (bu Unit) GetIp() string {
 }
 
 // DeleteInstance deletes the service instance from the database.
-func DeleteInstance(si *ServiceInstance, evt *event.Event, requestID string) error {
+func DeleteInstance(ctx context.Context, si *ServiceInstance, evt *event.Event, requestID string) error {
 	if len(si.Apps) > 0 {
 		return ErrServiceInstanceBound
 	}
-	s, err := Get(si.ServiceName)
+	s, err := Get(ctx, si.ServiceName)
 	if err != nil {
 		return err
 	}
 	endpoint, err := s.getClient("production")
-	if err == nil {
-		endpoint.Destroy(si, evt, requestID)
+	if err != nil {
+		return err
+	}
+	err = endpoint.Destroy(ctx, si, evt, requestID)
+	if err != nil {
+		if !si.ForceRemove {
+			return err
+		}
+		fmt.Fprintf(evt, "could not delete the service instance on service api: %v. ignoring this error due to force removal...\n", err)
 	}
 	conn, err := db.Conn()
 	if err != nil {
@@ -147,7 +170,7 @@ func (si *ServiceInstance) ToInfo() (ServiceInstanceWithInfo, error) {
 }
 
 func (si *ServiceInstance) Info(requestID string) (map[string]string, error) {
-	s, err := Get(si.ServiceName)
+	s, err := Get(si.ctx, si.ServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +178,7 @@ func (si *ServiceInstance) Info(requestID string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := endpoint.Info(si, requestID)
+	result, err := endpoint.Info(si.ctx, si, requestID)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +219,7 @@ func (si *ServiceInstance) Update(service Service, updateData ServiceInstance, e
 	}
 	actions := []*action.Action{&updateServiceInstance, &notifyUpdateServiceInstance}
 	pipeline := action.NewPipeline(actions...)
-	return pipeline.Execute(service, *si, updateData, evt, requestID)
+	return pipeline.Execute(si.ctx, service, *si, updateData, evt, requestID)
 }
 
 func (si *ServiceInstance) updateData(update bson.M) error {
@@ -226,12 +249,12 @@ func (si *ServiceInstance) BindApp(app bind.App, params BindAppParameters, shoul
 		bindUnitsAction,
 	}
 	pipeline := action.NewPipeline(actions...)
-	return pipeline.Execute(&args)
+	return pipeline.Execute(si.ctx, &args)
 }
 
 // BindUnit makes the bind between the binder and an unit.
 func (si *ServiceInstance) BindUnit(app bind.App, unit bind.Unit) error {
-	s, err := Get(si.ServiceName)
+	s, err := Get(si.ctx, si.ServiceName)
 	if err != nil {
 		return err
 	}
@@ -260,7 +283,7 @@ func (si *ServiceInstance) BindUnit(app bind.App, unit bind.Unit) error {
 		}
 		return err
 	}
-	err = endpoint.BindUnit(si, app, unit)
+	err = endpoint.BindUnit(si.ctx, si, app, unit)
 	if err != nil {
 		updateOp = bson.M{
 			"$pull": bson.M{
@@ -309,12 +332,12 @@ func (si *ServiceInstance) UnbindApp(unbindArgs UnbindAppArgs) error {
 		&removeBoundEnvs,
 	}
 	pipeline := action.NewPipeline(actions...)
-	return pipeline.Execute(&args)
+	return pipeline.Execute(si.ctx, &args)
 }
 
 // UnbindUnit makes the unbind between the service instance and an unit.
 func (si *ServiceInstance) UnbindUnit(app bind.App, unit bind.Unit) error {
-	s, err := Get(si.ServiceName)
+	s, err := Get(si.ctx, si.ServiceName)
 	if err != nil {
 		return err
 	}
@@ -343,7 +366,7 @@ func (si *ServiceInstance) UnbindUnit(app bind.App, unit bind.Unit) error {
 		}
 		return err
 	}
-	err = endpoint.UnbindUnit(si, app, unit)
+	err = endpoint.UnbindUnit(si.ctx, si, app, unit)
 	if err != nil {
 		updateOp = bson.M{
 			"$addToSet": bson.M{
@@ -365,7 +388,7 @@ func (si *ServiceInstance) UnbindUnit(app bind.App, unit bind.Unit) error {
 
 // Status returns the service instance status.
 func (si *ServiceInstance) Status(requestID string) (string, error) {
-	s, err := Get(si.ServiceName)
+	s, err := Get(si.ctx, si.ServiceName)
 	if err != nil {
 		return "", err
 	}
@@ -373,11 +396,11 @@ func (si *ServiceInstance) Status(requestID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return endpoint.Status(si, requestID)
+	return endpoint.Status(si.ctx, si, requestID)
 }
 
 func (si *ServiceInstance) Grant(teamName string) error {
-	team, err := servicemanager.Team.FindByName(teamName)
+	team, err := servicemanager.Team.FindByName(si.ctx, teamName)
 	if err != nil {
 		return err
 	}
@@ -385,7 +408,7 @@ func (si *ServiceInstance) Grant(teamName string) error {
 }
 
 func (si *ServiceInstance) Revoke(teamName string) error {
-	team, err := servicemanager.Team.FindByName(teamName)
+	team, err := servicemanager.Team.FindByName(si.ctx, teamName)
 	if err != nil {
 		return err
 	}
@@ -407,12 +430,16 @@ func genericServiceInstancesFilter(services interface{}, teams []string) bson.M 
 	return query
 }
 
-func validateServiceInstance(si ServiceInstance, s *Service) error {
+func validateServiceInstance(ctx context.Context, si ServiceInstance, s *Service) error {
 	err := validateServiceInstanceName(s.Name, si.Name)
 	if err != nil {
 		return err
 	}
-	return validateServiceInstanceTeamOwner(si)
+	err = validateServiceInstanceTeamOwner(si)
+	if err != nil {
+		return err
+	}
+	return validateMultiCluster(ctx, s, si)
 }
 
 func validateServiceInstanceName(service, instance string) error {
@@ -439,15 +466,15 @@ func validateServiceInstanceTeamOwner(si ServiceInstance) error {
 	if si.TeamOwner == "" {
 		return ErrTeamMandatory
 	}
-	_, err := servicemanager.Team.FindByName(si.TeamOwner)
+	_, err := servicemanager.Team.FindByName(si.ctx, si.TeamOwner)
 	if err == authTypes.ErrTeamNotFound {
 		return fmt.Errorf("Team owner doesn't exist")
 	}
 	return err
 }
 
-func CreateServiceInstance(instance ServiceInstance, service *Service, evt *event.Event, requestID string) error {
-	err := validateServiceInstance(instance, service)
+func CreateServiceInstance(ctx context.Context, instance ServiceInstance, service *Service, evt *event.Event, requestID string) error {
+	err := validateServiceInstance(ctx, instance, service)
 	if err != nil {
 		return err
 	}
@@ -456,7 +483,7 @@ func CreateServiceInstance(instance ServiceInstance, service *Service, evt *even
 	instance.Tags = processTags(instance.Tags)
 	actions := []*action.Action{&notifyCreateServiceInstance, &createServiceInstance}
 	pipeline := action.NewPipeline(actions...)
-	return pipeline.Execute(*service, &instance, evt, requestID)
+	return pipeline.Execute(ctx, *service, &instance, evt, requestID)
 }
 
 func GetServiceInstancesByServices(services []Service) ([]ServiceInstance, error) {
@@ -498,7 +525,7 @@ func GetServicesInstancesByTeamsAndNames(teams []string, names []string, appName
 	return instances, err
 }
 
-func GetServiceInstance(serviceName string, instanceName string) (*ServiceInstance, error) {
+func GetServiceInstance(ctx context.Context, serviceName string, instanceName string) (*ServiceInstance, error) {
 	conn, err := db.Conn()
 	if err != nil {
 		return nil, err
@@ -509,6 +536,7 @@ func GetServiceInstance(serviceName string, instanceName string) (*ServiceInstan
 	if err != nil {
 		return nil, ErrServiceInstanceNotFound
 	}
+	instance.ctx = ctx
 	return &instance, nil
 }
 
@@ -543,7 +571,7 @@ func processTags(tags []string) []string {
 	return processedTags
 }
 
-func RenameServiceInstanceTeam(oldName, newName string) error {
+func RenameServiceInstanceTeam(ctx context.Context, oldName, newName string) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err
@@ -559,8 +587,8 @@ func RenameServiceInstanceTeam(oldName, newName string) error {
 
 // ProxyInstance is a proxy between tsuru and the service instance.
 // This method allow customized service instance methods.
-func ProxyInstance(instance *ServiceInstance, path string, evt *event.Event, requestID string, w http.ResponseWriter, r *http.Request) error {
-	service, err := Get(instance.ServiceName)
+func ProxyInstance(ctx context.Context, instance *ServiceInstance, path string, evt *event.Event, requestID string, w http.ResponseWriter, r *http.Request) error {
+	service, err := Get(ctx, instance.ServiceName)
 	if err != nil {
 		return err
 	}
@@ -577,5 +605,22 @@ func ProxyInstance(instance *ServiceInstance, path string, evt *event.Event, req
 			}
 		}
 	}
-	return endpoint.Proxy(fmt.Sprintf("%s%s", prefix, path), evt, requestID, w, r)
+	return endpoint.Proxy(ctx, fmt.Sprintf("%s%s", prefix, path), evt, requestID, w, r)
+}
+
+func validateMultiCluster(ctx context.Context, s *Service, si ServiceInstance) error {
+	if !s.IsMultiCluster {
+		if si.Pool != "" {
+			return ErrRegularServiceInstanceCannotBelongToPool
+		}
+		return nil
+	}
+	if si.Pool == "" {
+		return ErrMultiClusterServiceRequiresPool
+	}
+	_, err := servicemanager.Pool.FindByName(ctx, si.Pool)
+	if err != nil {
+		return err
+	}
+	return nil
 }

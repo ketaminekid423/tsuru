@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -77,7 +78,7 @@ func (s *QuotaSuite) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func (s *QuotaSuite) TestGetUserQuota(c *check.C) {
@@ -89,7 +90,7 @@ func (s *QuotaSuite) TestGetUserQuota(c *check.C) {
 		Password: "qwe123",
 		Quota:    quota.Quota{Limit: 4, InUse: 2},
 	}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	defer conn.Users().Remove(bson.M{"email": user.Email})
 	request, err := http.NewRequest("GET", "/users/radio@gaga.com/quota", nil)
@@ -113,7 +114,7 @@ func (s *QuotaSuite) TestGetUserQuotaRequiresPermission(c *check.C) {
 		Email:    "radio@gaga.com",
 		Password: "qwe123",
 	}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c)
 	request, _ := http.NewRequest("GET", "/users/radio@gaga.com/quota", nil)
@@ -143,12 +144,12 @@ func (s *QuotaSuite) TestChangeUserQuota(c *check.C) {
 		Password: "qwe123",
 		Quota:    quota.Quota{Limit: 4, InUse: 2},
 	}
-	s.mockService.UserQuota.OnSetLimit = func(email string, limit int) error {
-		c.Assert(email, check.Equals, "radio@gaga.com")
+	s.mockService.UserQuota.OnSetLimit = func(item quota.QuotaItem, limit int) error {
+		c.Assert(item.GetName(), check.Equals, "radio@gaga.com")
 		c.Assert(limit, check.Equals, 40)
 		return nil
 	}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	defer conn.Users().Remove(bson.M{"email": user.Email})
 	body := bytes.NewBufferString("limit=40")
@@ -177,7 +178,7 @@ func (s *QuotaSuite) TestChangeUserQuotaRequiresPermission(c *check.C) {
 		Password: "qwe123",
 		Quota:    quota.Quota{Limit: 4, InUse: 2},
 	}
-	_, err := nativeScheme.Create(user)
+	_, err := nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c)
 	body := bytes.NewBufferString("limit=40")
@@ -196,7 +197,7 @@ func (s *QuotaSuite) TestChangeUserQuotaInvalidLimitValue(c *check.C) {
 		Password: "qwe123",
 		Quota:    quota.Quota{Limit: 4, InUse: 2},
 	}
-	_, err := nativeScheme.Create(user)
+	_, err := nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	values := []string{"four", ""}
 	for _, value := range values {
@@ -231,12 +232,12 @@ func (s *QuotaSuite) TestChangeUserQuotaLimitLowerThanAllocated(c *check.C) {
 		Password: "qwe123",
 		Quota:    quota.Quota{Limit: 4, InUse: 2},
 	}
-	s.mockService.UserQuota.OnSetLimit = func(email string, limit int) error {
-		c.Assert(email, check.Equals, "radio@gaga.com")
+	s.mockService.UserQuota.OnSetLimit = func(item quota.QuotaItem, limit int) error {
+		c.Assert(item.GetName(), check.Equals, "radio@gaga.com")
 		c.Assert(limit, check.Equals, 3)
 		return quota.ErrLimitLowerThanAllocated
 	}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	defer conn.Users().Remove(bson.M{"email": user.Email})
 	body := bytes.NewBufferString("limit=3")
@@ -273,12 +274,15 @@ func (s *QuotaSuite) TestChangeUserQuotaUserNotFound(c *check.C) {
 }
 
 func (s *QuotaSuite) TestGetAppQuota(c *check.C) {
+	s.mockService.AppQuota.OnGet = func(item quota.QuotaItem) (*quota.Quota, error) {
+		c.Assert(item.GetName(), check.Equals, "civil")
+		return &quota.Quota{Limit: 4, InUse: 2}, nil
+	}
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
 	app := &app.App{
 		Name:  "civil",
-		Quota: quota.Quota{Limit: 4, InUse: 2},
 		Teams: []string{s.team.Name},
 	}
 	err = conn.Apps().Insert(app)
@@ -298,7 +302,7 @@ func (s *QuotaSuite) TestGetAppQuota(c *check.C) {
 	var qt quota.Quota
 	err = json.NewDecoder(recorder.Body).Decode(&qt)
 	c.Assert(err, check.IsNil)
-	c.Assert(qt, check.DeepEquals, app.Quota)
+	c.Assert(qt, check.DeepEquals, quota.Quota{Limit: 4, InUse: 2})
 }
 
 func (s *QuotaSuite) TestGetAppQuotaRequiresAdmin(c *check.C) {
@@ -316,10 +320,10 @@ func (s *QuotaSuite) TestGetAppQuotaRequiresAdmin(c *check.C) {
 		Email:    "radio@gaga.com",
 		Password: "qwe123",
 	}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	defer conn.Users().Remove(bson.M{"email": user.Email})
-	token, err := nativeScheme.Login(map[string]string{"email": user.Email, "password": "qwe123"})
+	token, err := nativeScheme.Login(context.TODO(), map[string]string{"email": user.Email, "password": "qwe123"})
 	c.Assert(err, check.IsNil)
 	request, _ := http.NewRequest("GET", "/apps/shangrila/quota", nil)
 	request.Header.Set("Authorization", "bearer "+token.GetValue())
@@ -349,8 +353,8 @@ func (s *QuotaSuite) TestChangeAppQuota(c *check.C) {
 		Quota: quota.Quota{Limit: 4, InUse: 2},
 		Teams: []string{s.team.Name},
 	}
-	s.mockService.AppQuota.OnSetLimit = func(appName string, limit int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnSetLimit = func(item quota.QuotaItem, limit int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(limit, check.Equals, 40)
 		return nil
 	}
@@ -459,8 +463,8 @@ func (s *QuotaSuite) TestChangeAppQuotaLimitLowerThanAllocated(c *check.C) {
 		Quota: quota.Quota{Limit: 4, InUse: 2},
 		Teams: []string{s.team.Name},
 	}
-	s.mockService.AppQuota.OnSetLimit = func(appName string, limit int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnSetLimit = func(item quota.QuotaItem, limit int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(limit, check.Equals, 3)
 		return quota.ErrLimitLowerThanAllocated
 	}

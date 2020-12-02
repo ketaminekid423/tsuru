@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	_ "crypto/sha256"
@@ -19,6 +20,7 @@ import (
 	"github.com/tsuru/tsuru/log"
 	"github.com/tsuru/tsuru/permission"
 	"github.com/tsuru/tsuru/repository"
+	"github.com/tsuru/tsuru/servicemanager"
 	authTypes "github.com/tsuru/tsuru/types/auth"
 	permTypes "github.com/tsuru/tsuru/types/permission"
 	"github.com/tsuru/tsuru/types/quota"
@@ -31,6 +33,7 @@ type User struct {
 	Password string
 	APIKey   string
 	Roles    []authTypes.RoleInstance `bson:",omitempty"`
+	Groups   []string                 `bson:",omitempty"`
 }
 
 func listUsers(filter bson.M) ([]User, error) {
@@ -136,7 +139,7 @@ func (u *User) Delete() error {
 	if err != nil {
 		log.Errorf("failed to remove user %q from the database: %s", u.Email, err)
 	}
-	err = repository.Manager().RemoveUser(u.Email)
+	err = repository.Manager().RemoveUser(context.TODO(), u.Email)
 	if err != nil {
 		log.Errorf("failed to remove user %q from the repository manager: %s", u.Email, err)
 	}
@@ -157,9 +160,9 @@ func (u *User) AddKey(key repository.Key, force bool) error {
 		if key.Name == "" {
 			return authTypes.ErrInvalidKey
 		}
-		err := mngr.AddKey(u.Email, key)
+		err := mngr.AddKey(context.TODO(), u.Email, key)
 		if err == repository.ErrKeyAlreadyExists && force {
-			return mngr.UpdateKey(u.Email, key)
+			return mngr.UpdateKey(context.TODO(), u.Email, key)
 		}
 		return err
 	}
@@ -168,14 +171,14 @@ func (u *User) AddKey(key repository.Key, force bool) error {
 
 func (u *User) RemoveKey(key repository.Key) error {
 	if mngr, ok := repository.Manager().(repository.KeyRepositoryManager); ok {
-		return mngr.RemoveKey(u.Email, key)
+		return mngr.RemoveKey(context.TODO(), u.Email, key)
 	}
 	return authTypes.ErrKeyDisabled
 }
 
 func (u *User) ListKeys() (map[string]string, error) {
 	if mngr, ok := repository.Manager().(repository.KeyRepositoryManager); ok {
-		keys, err := mngr.ListKeys(u.Email)
+		keys, err := mngr.ListKeys(context.TODO(), u.Email)
 		if err != nil {
 			return nil, err
 		}
@@ -189,7 +192,7 @@ func (u *User) ListKeys() (map[string]string, error) {
 }
 
 func (u *User) createOnRepositoryManager() error {
-	return repository.Manager().CreateUser(u.Email)
+	return repository.Manager().CreateUser(context.TODO(), u.Email)
 }
 
 func (u *User) ShowAPIKey() (string, error) {
@@ -246,8 +249,28 @@ func expandRolePermissions(roleInstances []authTypes.RoleInstance) ([]permission
 	return permissions, nil
 }
 
+func (u *User) UserGroups() ([]authTypes.Group, error) {
+	groupsFilter := []string{}
+	if u.Groups != nil {
+		groupsFilter = u.Groups
+	}
+	groups, err := servicemanager.AuthGroup.List(groupsFilter)
+	if err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
 func (u *User) Permissions() ([]permission.Permission, error) {
-	permissions, err := expandRolePermissions(u.Roles)
+	groups, err := u.UserGroups()
+	if err != nil {
+		return nil, err
+	}
+	allRoles := u.Roles
+	for _, group := range groups {
+		allRoles = append(allRoles, group.Roles...)
+	}
+	permissions, err := expandRolePermissions(allRoles)
 	if err != nil {
 		return nil, err
 	}
@@ -380,4 +403,8 @@ func (u *User) AddRolesForEvent(roleEvent *permTypes.RoleEvent, contextValue str
 		}
 	}
 	return nil
+}
+
+func (u *User) GetName() string {
+	return u.Email
 }

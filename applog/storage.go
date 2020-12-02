@@ -20,6 +20,8 @@ type storageLogService struct {
 	storage    appTypes.AppLogStorage
 }
 
+var _ appTypes.AppLogServiceProvision = &storageLogService{}
+
 func storageAppLogService() (appTypes.AppLogService, error) {
 	dbDriver, err := storage.GetCurrentDbDriver()
 	if err != nil {
@@ -65,17 +67,25 @@ func (s *storageLogService) Add(appName, message, source, unit string) error {
 	return s.storage.InsertApp(appName, logs...)
 }
 
-func (s *storageLogService) List(filters appTypes.ListLogArgs) ([]appTypes.Applog, error) {
+func (s *storageLogService) List(ctx context.Context, filters appTypes.ListLogArgs) ([]appTypes.Applog, error) {
 	if filters.Limit < 0 {
 		return []appTypes.Applog{}, nil
 	}
-	return s.storage.List(filters)
+	return s.storage.List(ctx, filters)
 }
 
-func (s *storageLogService) Watch(filters appTypes.ListLogArgs) (appTypes.LogWatcher, error) {
-	return s.storage.Watch(filters)
+func (s *storageLogService) Watch(ctx context.Context, filters appTypes.ListLogArgs) (appTypes.LogWatcher, error) {
+	return s.storage.Watch(ctx, filters)
 }
 
 func (s *storageLogService) Shutdown(ctx context.Context) error {
 	return s.dispatcher.shutdown(ctx)
+}
+
+func (s *storageLogService) Provision(appName string) error {
+	return s.storage.Provision(appName)
+}
+
+func (s *storageLogService) CleanUp(appName string) error {
+	return s.storage.CleanUp(appName)
 }

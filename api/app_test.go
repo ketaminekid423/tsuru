@@ -115,10 +115,10 @@ func (s *S) setupMockForCreateApp(c *check.C, platName string) {
 
 func (s *S) TestAppListFilteringByPlatform(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{"a"}}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "python", TeamOwner: s.team.Name, Tags: []string{"b", "c"}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps?platform=zend", nil)
 	c.Assert(err, check.IsNil)
@@ -153,10 +153,10 @@ func (s *S) TestAppListFilteringByTeamOwner(c *check.C) {
 		return &authTypes.Team{Name: name}, nil
 	}
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{"tag 1"}}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: team.Name, Tags: []string{"tag 2"}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", fmt.Sprintf("/apps?teamOwner=%s", s.team.Name), nil)
 	c.Assert(err, check.IsNil)
@@ -189,10 +189,10 @@ func (s *S) TestAppListFilteringByOwner(c *check.C) {
 	})
 	u, _ := auth.ConvertNewUser(token.User())
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{"mytag"}}
-	err := app.CreateApp(&app1, u)
+	err := app.CreateApp(context.TODO(), &app1, u)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "python", TeamOwner: s.team.Name, Tags: []string{"mytag"}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", fmt.Sprintf("/apps?owner=%s", u.Email), nil)
 	c.Assert(err, check.IsNil)
@@ -225,10 +225,10 @@ func (s *S) TestAppListFilteringByTags(c *check.C) {
 	})
 	u, _ := auth.ConvertNewUser(token.User())
 	app1 := app.App{Name: "app1", TeamOwner: s.team.Name, Tags: []string{"tag1", "tag2"}}
-	err := app.CreateApp(&app1, u)
+	err := app.CreateApp(context.TODO(), &app1, u)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", TeamOwner: s.team.Name, Tags: []string{"tag2", "tag3"}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps?tag=tag3", nil)
 	c.Assert(err, check.IsNil)
@@ -262,7 +262,7 @@ func (s *S) TestAppListFilteringByTags(c *check.C) {
 
 func (s *S) TestAppListFilteringByLockState(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{
 		Name:      "app2",
@@ -271,7 +271,7 @@ func (s *S) TestAppListFilteringByLockState(c *check.C) {
 		Lock:      appTypes.AppLock{Locked: true},
 		Tags:      []string{"mytag"},
 	}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps?locked=true", nil)
 	c.Assert(err, check.IsNil)
@@ -303,14 +303,14 @@ func (s *S) TestAppListFilteringByPool(c *check.C) {
 		{Name: "pool2", Default: false, Public: true},
 	}
 	for _, opt := range opts {
-		err := pool.AddPool(opt)
+		err := pool.AddPool(context.TODO(), opt)
 		c.Assert(err, check.IsNil)
 	}
 	app1 := app.App{Name: "app1", Platform: "zend", Pool: opts[0].Name, TeamOwner: s.team.Name, Tags: []string{"mytag"}}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", Pool: opts[1].Name, TeamOwner: s.team.Name, Tags: []string{""}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", fmt.Sprintf("/apps?pool=%s", opts[1].Name), nil)
 	c.Assert(err, check.IsNil)
@@ -339,7 +339,7 @@ func (s *S) TestAppListFilteringByPool(c *check.C) {
 func (s *S) TestAppListFilteringByStatus(c *check.C) {
 	recorder := httptest.NewRecorder()
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{}}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &app1)
 	requestBody := strings.NewReader("units=2&process=web")
@@ -355,7 +355,7 @@ func (s *S) TestAppListFilteringByStatus(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &app2)
 	requestBody = strings.NewReader("units=1&process=web")
@@ -366,7 +366,7 @@ func (s *S) TestAppListFilteringByStatus(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	app3 := app.App{Name: "app3", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app3, s.user)
+	err = app.CreateApp(context.TODO(), &app3, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &app3)
 	request, err = http.NewRequest("GET", "/apps?status=stopped&status=started", nil)
@@ -395,7 +395,7 @@ func (s *S) TestAppListFilteringByStatus(c *check.C) {
 func (s *S) TestAppListFilteringByStatusIgnoresInvalidValues(c *check.C) {
 	recorder := httptest.NewRecorder()
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{}}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &app1)
 	requestBody := strings.NewReader("units=2&process=web")
@@ -410,7 +410,7 @@ func (s *S) TestAppListFilteringByStatusIgnoresInvalidValues(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name, Tags: []string{"tag"}}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &app2)
 	requestBody = strings.NewReader("units=1&process=web")
@@ -446,7 +446,7 @@ func (s *S) TestAppListFilteringByStatusIgnoresInvalidValues(c *check.C) {
 func (s *S) TestSimplifiedAppList(c *check.C) {
 	p := pool.Pool{Name: "pool1"}
 	opts := pool.AddPoolOptions{Name: p.Name, Public: true}
-	err := pool.AddPool(opts)
+	err := pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	app1 := app.App{
 		Name:      "app1",
@@ -456,7 +456,7 @@ func (s *S) TestSimplifiedAppList(c *check.C) {
 		Pool:      "pool1",
 		Tags:      []string{},
 	}
-	err = app.CreateApp(&app1, s.user)
+	err = app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	acquireDate := time.Date(2015, time.February, 12, 12, 3, 0, 0, time.Local)
 	app2 := app.App{
@@ -473,7 +473,7 @@ func (s *S) TestSimplifiedAppList(c *check.C) {
 		},
 		Tags: []string{"a"},
 	}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps?simplified=true", nil)
 	c.Assert(err, check.IsNil)
@@ -497,7 +497,7 @@ func (s *S) TestSimplifiedAppList(c *check.C) {
 func (s *S) TestAppList(c *check.C) {
 	p := pool.Pool{Name: "pool1"}
 	opts := pool.AddPoolOptions{Name: p.Name, Public: true}
-	err := pool.AddPool(opts)
+	err := pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	app1 := app.App{
 		Name:      "app1",
@@ -507,7 +507,7 @@ func (s *S) TestAppList(c *check.C) {
 		Pool:      "pool1",
 		Tags:      []string{},
 	}
-	err = app.CreateApp(&app1, s.user)
+	err = app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	acquireDate := time.Date(2015, time.February, 12, 12, 3, 0, 0, time.Local)
 	app2 := app.App{
@@ -524,7 +524,7 @@ func (s *S) TestAppList(c *check.C) {
 		},
 		Tags: []string{"a"},
 	}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps", nil)
 	c.Assert(err, check.IsNil)
@@ -565,7 +565,7 @@ func (s *S) TestAppListAfterAppInfoHasAddr(c *check.C) {
 	}
 	p := pool.Pool{Name: "pool1"}
 	opts := pool.AddPoolOptions{Name: p.Name, Public: true}
-	err := pool.AddPool(opts)
+	err := pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	app1 := app.App{
 		Name:      "app1",
@@ -575,7 +575,7 @@ func (s *S) TestAppListAfterAppInfoHasAddr(c *check.C) {
 		Pool:      "pool1",
 		Tags:      []string{},
 	}
-	err = app.CreateApp(&app1, s.user)
+	err = app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps/app1", nil)
 	c.Assert(err, check.IsNil)
@@ -613,7 +613,7 @@ func (s *S) TestAppListAfterAppInfoHasAddrLegacyRouter(c *check.C) {
 	}
 	p := pool.Pool{Name: "pool1"}
 	opts := pool.AddPoolOptions{Name: p.Name, Public: true}
-	err := pool.AddPool(opts)
+	err := pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	app1 := app.App{
 		Name:      "app1",
@@ -628,7 +628,7 @@ func (s *S) TestAppListAfterAppInfoHasAddrLegacyRouter(c *check.C) {
 	defer conn.Close()
 	err = conn.Apps().Insert(app1)
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(&app1)
+	routertest.FakeRouter.AddBackend(context.TODO(), &app1)
 	request, err := http.NewRequest("GET", "/apps/app1", nil)
 	c.Assert(err, check.IsNil)
 	request.Header.Set("Content-Type", "application/json")
@@ -661,7 +661,7 @@ func (s *S) TestAppListUnitsError(c *check.C) {
 		Name:      "app1",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	provisiontest.ProvisionerInstance.PrepareFailure("Units", fmt.Errorf("some units error"))
 	request, err := http.NewRequest("GET", "/apps", nil)
@@ -699,10 +699,10 @@ func (s *S) TestAppListShouldListAllAppsOfAllTeamsThatTheUserHasPermission(c *ch
 	})
 	u, _ := auth.ConvertNewUser(token.User())
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: "angra"}
-	err := app.CreateApp(&app1, u)
+	err := app.CreateApp(context.TODO(), &app1, u)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, u)
+	err = app.CreateApp(context.TODO(), &app2, u)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps", nil)
 	c.Assert(err, check.IsNil)
@@ -736,9 +736,9 @@ func (s *S) TestDelete(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(myApp, s.user)
+	err := app.CreateApp(context.TODO(), myApp, s.user)
 	c.Assert(err, check.IsNil)
-	myApp, err = app.GetByName(myApp.Name)
+	myApp, err = app.GetByName(context.TODO(), myApp.Name)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("DELETE", "/apps/"+myApp.Name+"?:app="+myApp.Name, nil)
 	c.Assert(err, check.IsNil)
@@ -761,7 +761,7 @@ func (s *S) TestDelete(c *check.C) {
 			{"name": ":app", "value": myApp.Name},
 		},
 	}, eventtest.HasEvent)
-	_, err = repository.Manager().GetRepository(myApp.Name)
+	_, err = repository.Manager().GetRepository(context.TODO(), myApp.Name)
 	c.Assert(err, check.NotNil)
 }
 
@@ -797,9 +797,9 @@ func (s *S) TestDeleteAdminAuthorized(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(myApp, s.user)
+	err := app.CreateApp(context.TODO(), myApp, s.user)
 	c.Assert(err, check.IsNil)
-	myApp, err = app.GetByName(myApp.Name)
+	myApp, err = app.GetByName(context.TODO(), myApp.Name)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("DELETE", "/apps/"+myApp.Name+"?:app="+myApp.Name, nil)
 	c.Assert(err, check.IsNil)
@@ -812,7 +812,7 @@ func (s *S) TestDeleteAdminAuthorized(c *check.C) {
 func (s *S) TestAppInfo(c *check.C) {
 	config.Set("host", "http://myhost.com")
 	expectedApp := app.App{Name: "new-app", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&expectedApp, s.user)
+	err := app.CreateApp(context.TODO(), &expectedApp, s.user)
 	c.Assert(err, check.IsNil)
 	var myApp map[string]interface{}
 	request, err := http.NewRequest("GET", "/apps/"+expectedApp.Name+"?:app="+expectedApp.Name, nil)
@@ -914,7 +914,7 @@ func (s *S) TestCreateAppRemoveRole(c *check.C) {
 			{"name": "platform", "value": "zend"},
 		},
 	}, eventtest.HasEvent)
-	_, err = repository.Manager().GetRepository(a.Name)
+	_, err = repository.Manager().GetRepository(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 }
 
@@ -931,8 +931,8 @@ func (s *S) TestCreateApp(c *check.C) {
 		Scheme:  permission.PermAppCreate,
 		Context: permission.Context(permTypes.CtxTeam, s.team.Name),
 	})
-	s.mockService.UserQuota.OnInc = func(email string, q int) error {
-		c.Assert(email, check.Equals, token.GetUserName())
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, q int) error {
+		c.Assert(item.GetName(), check.Equals, token.GetUserName())
 		return nil
 	}
 	request.Header.Set("Authorization", "b "+token.GetValue())
@@ -963,7 +963,7 @@ func (s *S) TestCreateApp(c *check.C) {
 			{"name": "platform", "value": "zend"},
 		},
 	}, eventtest.HasEvent)
-	_, err = repository.Manager().GetRepository(a.Name)
+	_, err = repository.Manager().GetRepository(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 }
 
@@ -1006,7 +1006,7 @@ func (s *S) TestCreateAppWithoutPlatform(c *check.C) {
 			{"name": "name", "value": a.Name},
 		},
 	}, eventtest.HasEvent)
-	_, err = repository.Manager().GetRepository(a.Name)
+	_, err = repository.Manager().GetRepository(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 }
 
@@ -1260,7 +1260,7 @@ func (s *S) TestCreateAppWithTags(c *check.C) {
 func (s *S) TestCreateAppWithPool(c *check.C) {
 	platName := "zend"
 	s.setupMockForCreateApp(c, platName)
-	err := pool.AddPool(pool.AddPoolOptions{Name: "mypool1", Public: true})
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{Name: "mypool1", Public: true})
 	c.Assert(err, check.IsNil)
 	appName := "someapp"
 	data, err := url.QueryUnescape(fmt.Sprintf("name=%s&platform=%s&pool=mypool1", appName, platName))
@@ -1411,8 +1411,8 @@ func (s *S) TestCreateAppUserQuotaExceeded(c *check.C) {
 		Scheme:  permission.PermAppCreate,
 		Context: permission.Context(permTypes.CtxTeam, s.team.Name),
 	})
-	s.mockService.UserQuota.OnInc = func(email string, q int) error {
-		c.Assert(email, check.Equals, token.GetUserName())
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, q int) error {
+		c.Assert(item.GetName(), check.Equals, token.GetUserName())
 		return &quota.QuotaExceededError{Available: 0, Requested: 1}
 	}
 	u, _ := token.User()
@@ -1488,7 +1488,7 @@ func (s *S) TestCreateAppReturnsUnauthorizedIfNoPermissions(c *check.C) {
 func (s *S) TestCreateAppReturnsConflictWithProperMessageWhenTheAppAlreadyExist(c *check.C) {
 	s.setupMockForCreateApp(c, "zend")
 	a := app.App{Name: "plainsofdawn", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("name=plainsofdawn&platform=zend")
 	request, err := http.NewRequest("POST", "/apps", b)
@@ -1554,7 +1554,7 @@ func (s *S) TestCreateAppWithDisabledPlatformAndPlatformUpdater(c *check.C) {
 			{"name": "platform", "value": p.Name},
 		},
 	}, eventtest.HasEvent)
-	_, err = repository.Manager().GetRepository(a.Name)
+	_, err = repository.Manager().GetRepository(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 }
 
@@ -1583,7 +1583,7 @@ func (s *S) TestCreateAppWithDisabledPlatformAndNotAdminUser(c *check.C) {
 
 func (s *S) TestUpdateAppWithDescriptionOnly(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdate,
@@ -1616,7 +1616,7 @@ func (s *S) TestUpdateAppWithDescriptionOnly(c *check.C) {
 func (s *S) TestUpdateAppPlatformOnly(c *check.C) {
 	s.setupMockForCreateApp(c, "zend")
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdate,
@@ -1651,7 +1651,7 @@ func (s *S) TestUpdateAppPlatformOnly(c *check.C) {
 func (s *S) TestUpdateAppPlatformWithVersion(c *check.C) {
 	s.setupMockForCreateApp(c, "myplatform")
 	a := app.App{Name: "myapp", Platform: "myplatform", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdate,
@@ -1689,7 +1689,7 @@ func (s *S) TestUpdateAppPlatformWithVersion(c *check.C) {
 
 func (s *S) TestUpdateAppWithTagsOnly(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdate,
@@ -1722,7 +1722,7 @@ func (s *S) TestUpdateAppWithTagsOnly(c *check.C) {
 
 func (s *S) TestUpdateAppWithTagsWithoutPermission(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdateDescription,
@@ -1740,7 +1740,7 @@ func (s *S) TestUpdateAppWithTagsWithoutPermission(c *check.C) {
 
 func (s *S) TestUpdateAppImageReset(c *check.C) {
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	body := strings.NewReader("imageReset=true")
 	request, err := http.NewRequest("PUT", "/apps/myappx", body)
@@ -1758,10 +1758,10 @@ func (s *S) TestUpdateAppImageReset(c *check.C) {
 
 func (s *S) TestUpdateAppWithPoolOnly(c *check.C) {
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "test"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("test", []string{s.team.Name})
 	c.Assert(err, check.IsNil)
@@ -1777,10 +1777,10 @@ func (s *S) TestUpdateAppWithPoolOnly(c *check.C) {
 
 func (s *S) TestUpdateAppPoolWithNoRestart(c *check.C) {
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "test"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("test", []string{s.team.Name})
 	c.Assert(err, check.IsNil)
@@ -1800,7 +1800,7 @@ func (s *S) TestUpdateAppPoolForbiddenIfTheUserDoesNotHaveAccess(c *check.C) {
 	err := s.conn.Apps().Insert(&a)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "test"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdatePool,
@@ -1835,10 +1835,10 @@ func (s *S) TestUpdateAppPoolWithDifferentProvisioner(c *check.C) {
 		return p1, nil
 	})
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "fakepool", Provisioner: "fake1"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("fakepool", []string{s.team.Name})
 	c.Assert(err, check.IsNil)
@@ -1873,7 +1873,7 @@ func (s *S) TestUpdateAppPlanOnly(c *check.C) {
 		return plans, nil
 	}
 	a := app.App{Name: "someapp", Platform: "zend", TeamOwner: s.team.Name, Plan: plans[1]}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	body := strings.NewReader("plan=hiperplan")
@@ -1884,10 +1884,80 @@ func (s *S) TestUpdateAppPlanOnly(c *check.C) {
 	recorder := httptest.NewRecorder()
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Plan, check.DeepEquals, plans[0])
 	c.Assert(s.provisioner.Restarts(&a, ""), check.Equals, 1)
+}
+
+func (s *S) TestUpdateAppPlanOverrideOnly(c *check.C) {
+	config.Set("docker:router", "fake")
+	defer config.Unset("docker:router")
+	originalPlan := appTypes.Plan{Name: "hiperplan", Memory: 536870912, Swap: 536870912, CpuShare: 100}
+	s.mockService.Plan.OnFindByName = func(name string) (*appTypes.Plan, error) {
+		return &originalPlan, nil
+	}
+	s.mockService.Plan.OnList = func() ([]appTypes.Plan, error) {
+		return []appTypes.Plan{originalPlan}, nil
+	}
+	a := app.App{Name: "someapp", Platform: "zend", TeamOwner: s.team.Name, Plan: originalPlan}
+	err := app.CreateApp(context.TODO(), &a, s.user)
+	c.Assert(err, check.IsNil)
+	newSuccessfulAppVersion(c, &a)
+
+	tests := []struct {
+		body               string
+		memory, swap       int64
+		cpuShare, cpuMilli int
+	}{
+		{
+			body:     "planoverride.memory=314572800",
+			memory:   314572800,
+			swap:     536870912,
+			cpuShare: 100,
+			cpuMilli: 0,
+		},
+		{
+			body:     "planoverride.cpumilli=200",
+			memory:   314572800,
+			swap:     536870912,
+			cpuShare: 100,
+			cpuMilli: 200,
+		},
+		{
+			body:     "planoverride.memory=",
+			memory:   536870912,
+			swap:     536870912,
+			cpuShare: 100,
+			cpuMilli: 200,
+		},
+		{
+			body:     "planoverride.cpumilli=100",
+			memory:   536870912,
+			swap:     536870912,
+			cpuShare: 100,
+			cpuMilli: 100,
+		},
+	}
+
+	for i, tt := range tests {
+		c.Logf("test %d", i)
+		body := strings.NewReader(tt.body)
+		request, err := http.NewRequest("PUT", "/apps/someapp", body)
+		c.Assert(err, check.IsNil)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Authorization", "bearer "+s.token.GetValue())
+		recorder := httptest.NewRecorder()
+		s.testServer.ServeHTTP(recorder, request)
+		c.Assert(recorder.Code, check.Equals, http.StatusOK, check.Commentf("body: %v", recorder.Body.String()))
+		dbApp, err := app.GetByName(context.TODO(), a.Name)
+		c.Assert(err, check.IsNil)
+		c.Assert(dbApp.GetMemory(), check.Equals, tt.memory)
+		c.Assert(dbApp.GetSwap(), check.Equals, tt.swap)
+		c.Assert(dbApp.GetCpuShare(), check.Equals, tt.cpuShare)
+		c.Assert(dbApp.GetMilliCPU(), check.Equals, tt.cpuMilli)
+		c.Assert(s.provisioner.Restarts(&a, ""), check.Equals, i+1)
+	}
 }
 
 func (s *S) TestUpdateAppPlanNotFound(c *check.C) {
@@ -1902,7 +1972,7 @@ func (s *S) TestUpdateAppPlanNotFound(c *check.C) {
 		return []appTypes.Plan{plan}, nil
 	}
 	a := app.App{Name: "someapp", Platform: "zend", TeamOwner: s.team.Name, Plan: plan}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	body := strings.NewReader("plan=hiperplan")
 	request, err := http.NewRequest("PUT", "/apps/someapp", body)
@@ -1917,7 +1987,7 @@ func (s *S) TestUpdateAppPlanNotFound(c *check.C) {
 
 func (s *S) TestUpdateAppWithoutFlag(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppUpdate,
@@ -1937,7 +2007,7 @@ func (s *S) TestUpdateAppWithoutFlag(c *check.C) {
 
 func (s *S) TestUpdateAppReturnsUnauthorizedIfNoPermissions(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c)
 	b := strings.NewReader("description=description of my app")
@@ -1958,7 +2028,7 @@ func (s *S) TestUpdateAppWithTeamOwnerOnly(c *check.C) {
 	})
 	user, err := auth.ConvertNewUser(token.User())
 	c.Assert(err, check.IsNil)
-	err = app.CreateApp(&a, user)
+	err = app.CreateApp(context.TODO(), &a, user)
 	c.Assert(err, check.IsNil)
 	team := authTypes.Team{Name: "newowner"}
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -1980,12 +2050,12 @@ func (s *S) TestUpdateAppWithTeamOwnerOnly(c *check.C) {
 
 func (s *S) TestUpdateAppTeamOwnerToUserWhoCantBeOwner(c *check.C) {
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	user := &auth.User{Email: "teste@thewho.com", Password: "123456", Quota: quota.UnlimitedQuota}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
-	token, err := nativeScheme.Login(map[string]string{"email": user.Email, "password": "123456"})
+	token, err := nativeScheme.Login(context.TODO(), map[string]string{"email": user.Email, "password": "123456"})
 	c.Assert(err, check.IsNil)
 	body := strings.NewReader("teamOwner=newowner")
 	req, err := http.NewRequest("PUT", "/apps/myappx", body)
@@ -2007,7 +2077,7 @@ func (s *S) TestUpdateAppTeamOwnerSetNewTeamToAppAddThatTeamToAppTeamList(c *che
 	})
 	user, err := auth.ConvertNewUser(token.User())
 	c.Assert(err, check.IsNil)
-	err = app.CreateApp(&a, user)
+	err = app.CreateApp(context.TODO(), &a, user)
 	c.Assert(err, check.IsNil)
 	team := authTypes.Team{Name: "newowner"}
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -2029,11 +2099,11 @@ func (s *S) TestUpdateAppTeamOwnerSetNewTeamToAppAddThatTeamToAppTeamList(c *che
 
 func (s *S) TestAddUnits(c *check.C) {
 	a := app.App{Name: "armorandsword", Platform: "zend", TeamOwner: s.team.Name, Quota: quota.Quota{Limit: 10, InUse: 0}}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 3)
 		return nil
 	}
@@ -2045,7 +2115,7 @@ func (s *S) TestAddUnits(c *check.C) {
 	request.Header.Set("Authorization", "b "+s.token.GetValue())
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	units, err := app.Units()
 	c.Assert(err, check.IsNil)
@@ -2061,11 +2131,11 @@ func (s *S) TestAddUnits(c *check.C) {
 
 func (s *S) TestAddUnitsUnlimited(c *check.C) {
 	a := app.App{Name: "armorandsword", Platform: "zend", TeamOwner: s.team.Name, Quota: quota.UnlimitedQuota}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 3)
 		return nil
 	}
@@ -2077,7 +2147,7 @@ func (s *S) TestAddUnitsUnlimited(c *check.C) {
 	request.Header.Set("Authorization", "b "+s.token.GetValue())
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	units, err := app.Units()
 	c.Assert(err, check.IsNil)
@@ -2139,11 +2209,11 @@ func (s *S) TestAddUnitsReturns400IfNumberOfUnitsIsOmitted(c *check.C) {
 
 func (s *S) TestAddUnitsWorksIfProcessIsOmitted(c *check.C) {
 	a := app.App{Name: "armorandsword", Platform: "zend", TeamOwner: s.team.Name, Quota: quota.UnlimitedQuota}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 3)
 		return nil
 	}
@@ -2155,7 +2225,7 @@ func (s *S) TestAddUnitsWorksIfProcessIsOmitted(c *check.C) {
 	err = addUnits(recorder, request, s.token)
 	c.Assert(err, check.IsNil)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	units, err := app.Units()
 	c.Assert(err, check.IsNil)
@@ -2188,11 +2258,11 @@ func (s *S) TestAddUnitsReturns400IfNumberIsInvalid(c *check.C) {
 
 func (s *S) TestAddUnitsQuotaExceeded(c *check.C) {
 	a := app.App{Name: "armorandsword", Platform: "zend", TeamOwner: s.team.Name, Quota: quota.Quota{Limit: 2, InUse: 0}}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 3)
 		return &quota.QuotaExceededError{Available: 2, Requested: 3}
 	}
@@ -2215,15 +2285,15 @@ func (s *S) TestAddUnitsQuotaExceeded(c *check.C) {
 
 func (s *S) TestRemoveUnits(c *check.C) {
 	a := app.App{Name: "velha", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName(), check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 2)
 		return nil
 	}
-	s.provisioner.AddUnits(&a, 3, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 3, "web", nil, nil)
 	request, err := http.NewRequest("DELETE", "/apps/velha/units?units=2&process=web", nil)
 	c.Assert(err, check.IsNil)
 	request.Header.Set("Authorization", "b "+s.token.GetValue())
@@ -2231,7 +2301,7 @@ func (s *S) TestRemoveUnits(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	units, err := app.Units()
 	c.Assert(err, check.IsNil)
@@ -2294,21 +2364,21 @@ func (s *S) TestRemoveUnitsReturns400IfNumberOfUnitsIsOmitted(c *check.C) {
 
 func (s *S) TestRemoveUnitsWorksIfProcessIsOmitted(c *check.C) {
 	a := app.App{Name: "velha", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.mockService.AppQuota.OnInc = func(appName string, quantity int) error {
-		c.Assert(appName, check.Equals, a.Name)
+	s.mockService.AppQuota.OnInc = func(item quota.QuotaItem, quantity int) error {
+		c.Assert(item.GetName, check.Equals, a.Name)
 		c.Assert(quantity, check.Equals, 2)
 		return nil
 	}
-	s.provisioner.AddUnits(&a, 3, "", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 3, "", nil, nil)
 	request, err := http.NewRequest("DELETE", "/apps/velha/units?:app=velha&units=2&process=", nil)
 	c.Assert(err, check.IsNil)
 	recorder := httptest.NewRecorder()
 	err = removeUnits(recorder, request, s.token)
 	c.Assert(err, check.IsNil)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	units, err := app.Units()
 	c.Assert(err, check.IsNil)
@@ -2348,9 +2418,9 @@ func (s *S) TestRemoveUnitsReturns400IfNumberIsInvalid(c *check.C) {
 
 func (s *S) TestSetUnitStatus(c *check.C) {
 	a := app.App{Name: "telegram", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 3, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 3, "web", nil, nil)
 	body := strings.NewReader("status=error")
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
@@ -2413,12 +2483,12 @@ func (s *S) TestSetUnitStatusAppNotFound(c *check.C) {
 }
 
 func (s *S) TestSetNodeStatus(c *check.C) {
-	token, err := nativeScheme.AppLogin(app.InternalAppName)
+	token, err := nativeScheme.AppLogin(context.TODO(), app.InternalAppName)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "telegram", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddNode(provision.AddNodeOptions{
+	err = s.provisioner.AddNode(context.TODO(), provision.AddNodeOptions{
 		Address: "addr1",
 	})
 	c.Assert(err, check.IsNil)
@@ -2465,12 +2535,12 @@ func (s *S) TestSetNodeStatus(c *check.C) {
 }
 
 func (s *S) TestSetNodeStatusNotFound(c *check.C) {
-	token, err := nativeScheme.AppLogin(app.InternalAppName)
+	token, err := nativeScheme.AppLogin(context.TODO(), app.InternalAppName)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "telegram", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 3, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 3, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units, err := s.provisioner.AddUnitsToNode(&a, 3, "web", nil, "addr1")
 	c.Assert(err, check.IsNil)
@@ -2541,7 +2611,7 @@ func (s *S) TestAddTeamToTheApp(c *check.C) {
 		return &authTypes.Team{Name: name}, nil
 	}
 	a := app.App{Name: "itshard", Platform: "zend", TeamOwner: t.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/teams/%s", a.Name, s.team.Name)
 	request, err := http.NewRequest("PUT", url, nil)
@@ -2550,7 +2620,7 @@ func (s *S) TestAddTeamToTheApp(c *check.C) {
 	request.Header.Set("Authorization", "bearer "+s.token.GetValue())
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Teams, check.HasLen, 2)
 	c.Assert(app.Teams[1], check.Equals, s.team.Name)
@@ -2594,7 +2664,7 @@ func (s *S) TestGrantAccessToTeamReturn403IfTheGivenUserDoesNotHasAccessToTheApp
 
 func (s *S) TestGrantAccessToTeamReturn404IfTheTeamDoesNotExist(c *check.C) {
 	a := app.App{Name: "itshard", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newTeamName := "newteam"
 	s.mockService.Team.OnFindByName = func(name string) (*authTypes.Team, error) {
@@ -2613,7 +2683,7 @@ func (s *S) TestGrantAccessToTeamReturn404IfTheTeamDoesNotExist(c *check.C) {
 
 func (s *S) TestGrantAccessToTeamReturn409IfTheTeamHasAlreadyAccessToTheApp(c *check.C) {
 	a := app.App{Name: "itshard", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/teams/%s", a.Name, s.team.Name)
 	request, err := http.NewRequest("PUT", url, nil)
@@ -2644,7 +2714,7 @@ func (s *S) TestGrantAccessToTeamCallsRepositoryManager(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: t.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/teams/%s", a.Name, s.team.Name)
 	request, err := http.NewRequest("PUT", url, nil)
@@ -2669,7 +2739,7 @@ func (s *S) TestRevokeAccessFromTeam(c *check.C) {
 	request.Header.Set("Authorization", "bearer "+s.token.GetValue())
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Teams, check.HasLen, 1)
 	c.Assert(app.Teams[0], check.Equals, "abcd")
@@ -2713,7 +2783,7 @@ func (s *S) TestRevokeAccessFromTeamReturn401IfTheGivenUserDoesNotHavePermission
 
 func (s *S) TestRevokeAccessFromTeamReturn404IfTheTeamDoesNotExist(c *check.C) {
 	a := app.App{Name: "itshard", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	teamName := "notfound"
 	s.mockService.Team.OnFindByName = func(name string) (*authTypes.Team, error) {
@@ -2751,7 +2821,7 @@ func (s *S) TestRevokeAccessFromTeamReturn404IfTheTeamDoesNotHaveAccessToTheApp(
 
 func (s *S) TestRevokeAccessFromTeamReturn403IfTheTeamIsTheLastWithAccessToTheApp(c *check.C) {
 	a := app.App{Name: "itshard", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/teams/%s", a.Name, s.team.Name)
 	request, err := http.NewRequest("DELETE", url, nil)
@@ -2780,7 +2850,7 @@ func (s *S) TestRevokeAccessFromTeamRemovesRepositoryFromRepository(c *check.C) 
 		Context: permission.Context(permTypes.CtxTeam, t.Name),
 	})
 	a := app.App{Name: "tsuru", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	s.mockService.Team.OnFindByName = func(name string) (*authTypes.Team, error) {
 		c.Assert(name, check.Equals, t.Name)
@@ -2811,10 +2881,10 @@ func (s *S) TestRevokeAccessFromTeamDontRemoveTheUserIfItHasAccesToTheAppThrough
 	u := auth.User{Email: "burning@angel.com", Quota: quota.UnlimitedQuota}
 	err := s.conn.Users().Insert(u)
 	c.Assert(err, check.IsNil)
-	repository.Manager().CreateUser(u.Email)
+	repository.Manager().CreateUser(context.TODO(), u.Email)
 	t := authTypes.Team{Name: "anything"}
 	a := app.App{Name: "tsuru", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	s.mockService.Team.OnFindByName = func(name string) (*authTypes.Team, error) {
 		c.Assert(name, check.Equals, t.Name)
@@ -2841,9 +2911,9 @@ func (s *S) TestRevokeAccessFromTeamDontRemoveTheUserIfItHasAccesToTheAppThrough
 func (s *S) TestRunOnce(c *check.C) {
 	s.provisioner.PrepareOutput([]byte("lots of files"))
 	a := app.App{Name: "secrets", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 3, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 3, "web", nil, nil)
 	url := fmt.Sprintf("/apps/%s/run", a.Name)
 	request, err := http.NewRequest("POST", url, strings.NewReader("command=ls&once=true"))
 	c.Assert(err, check.IsNil)
@@ -2879,9 +2949,9 @@ func (s *S) TestRunOnce(c *check.C) {
 func (s *S) TestRun(c *check.C) {
 	s.provisioner.PrepareOutput([]byte("lots of\nfiles"))
 	a := app.App{Name: "secrets", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	url := fmt.Sprintf("/apps/%s/run", a.Name)
 	request, err := http.NewRequest("POST", url, strings.NewReader("command=ls"))
 	c.Assert(err, check.IsNil)
@@ -2915,9 +2985,9 @@ func (s *S) TestRun(c *check.C) {
 func (s *S) TestRunIsolated(c *check.C) {
 	s.provisioner.PrepareOutput([]byte("lots of files"))
 	a := app.App{Name: "secrets", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 3, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 3, "web", nil, nil)
 	url := fmt.Sprintf("/apps/%s/run", a.Name)
 	request, err := http.NewRequest("POST", url, strings.NewReader("command=ls&isolated=true"))
 	c.Assert(err, check.IsNil)
@@ -2951,9 +3021,9 @@ func (s *S) TestRunReturnsTheOutputOfTheCommandEvenIfItFails(c *check.C) {
 	s.provisioner.PrepareFailure("ExecuteCommand", &errors.HTTP{Code: 500, Message: "something went wrong"})
 	s.provisioner.PrepareOutput([]byte("failure output"))
 	a := app.App{Name: "secrets", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	url := fmt.Sprintf("/apps/%s/run", a.Name)
 	request, err := http.NewRequest("POST", url, strings.NewReader("command=ls"))
 	c.Assert(err, check.IsNil)
@@ -2978,9 +3048,9 @@ func (s *S) TestRunReturnsTheOutputOfTheCommandEvenIfItFails(c *check.C) {
 
 func (s *S) TestRunReturnsBadRequestIfTheCommandIsMissing(c *check.C) {
 	a := app.App{Name: "secrets", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	bodies := []io.Reader{nil, strings.NewReader("")}
 	for _, body := range bodies {
 		request, err := http.NewRequest("POST", "/apps/secrets/run", body)
@@ -3033,7 +3103,7 @@ func (s *S) TestGetEnvAllEnvs(c *check.C) {
 			"DATABASE_USER": {Name: "DATABASE_USER", Value: "root", Public: true},
 		},
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env?envs=", a.Name)
 	request, err := http.NewRequest("GET", url, nil)
@@ -3079,7 +3149,7 @@ func (s *S) TestGetEnv(c *check.C) {
 			"DATABASE_PASSWORD": {Name: "DATABASE_PASSWORD", Value: "secret", Public: false},
 		},
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env?env=DATABASE_HOST", a.Name)
 	request, err := http.NewRequest("GET", url, nil)
@@ -3112,7 +3182,7 @@ func (s *S) TestGetEnvMultipleVariables(c *check.C) {
 			"DATABASE_PASSWORD": {Name: "DATABASE_PASSWORD", Value: "secret", Public: false},
 		},
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env?env=DATABASE_HOST&env=DATABASE_USER", a.Name)
 	request, err := http.NewRequest("GET", url, nil)
@@ -3170,12 +3240,12 @@ func (s *S) TestGetEnvWithAppToken(c *check.C) {
 			"DATABASE_PASSWORD": {Name: "DATABASE_PASSWORD", Value: "secret", Public: false},
 		},
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env?env=DATABASE_HOST", a.Name)
 	request, err := http.NewRequest("GET", url, nil)
 	c.Assert(err, check.IsNil)
-	token, err := nativeScheme.AppLogin(a.Name)
+	token, err := nativeScheme.AppLogin(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	request.Header.Set("Authorization", "b "+token.GetValue())
 	recorder := httptest.NewRecorder()
@@ -3197,7 +3267,7 @@ func (s *S) TestGetEnvWithAppToken(c *check.C) {
 
 func (s *S) TestSetEnvPublicEnvironmentVariableInTheApp(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3218,7 +3288,7 @@ func (s *S) TestSetEnvPublicEnvironmentVariableInTheApp(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("black-dog")
+	app, err := app.GetByName(context.TODO(), "black-dog")
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{Name: "DATABASE_HOST", Value: "localhost", Public: true}
 	c.Assert(app.Env["DATABASE_HOST"], check.DeepEquals, expected)
@@ -3241,7 +3311,7 @@ func (s *S) TestSetEnvPublicEnvironmentVariableInTheApp(c *check.C) {
 
 func (s *S) TestSetEnvPublicEnvironmentVariableAlias(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3263,7 +3333,7 @@ func (s *S) TestSetEnvPublicEnvironmentVariableAlias(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("black-dog")
+	app, err := app.GetByName(context.TODO(), "black-dog")
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Env["DATABASE_HOST"], check.DeepEquals, bind.EnvVar{
 		Name:   "DATABASE_HOST",
@@ -3296,7 +3366,7 @@ func (s *S) TestSetEnvPublicEnvironmentVariableAlias(c *check.C) {
 
 func (s *S) TestSetEnvHandlerShouldSetAPrivateEnvironmentVariableInTheApp(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3317,7 +3387,7 @@ func (s *S) TestSetEnvHandlerShouldSetAPrivateEnvironmentVariableInTheApp(c *che
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("black-dog")
+	app, err := app.GetByName(context.TODO(), "black-dog")
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{Name: "DATABASE_HOST", Value: "localhost", Public: false}
 	c.Assert(app.Env["DATABASE_HOST"], check.DeepEquals, expected)
@@ -3340,7 +3410,7 @@ func (s *S) TestSetEnvHandlerShouldSetAPrivateEnvironmentVariableInTheApp(c *che
 
 func (s *S) TestSetEnvHandlerShouldSetADoublePrivateEnvironmentVariableInTheApp(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3392,7 +3462,7 @@ func (s *S) TestSetEnvHandlerShouldSetADoublePrivateEnvironmentVariableInTheApp(
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("black-dog")
+	app, err := app.GetByName(context.TODO(), "black-dog")
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{Name: "DATABASE_HOST", Value: "127.0.0.1", Public: false}
 	c.Assert(app.Env["DATABASE_HOST"], check.DeepEquals, expected)
@@ -3417,7 +3487,7 @@ func (s *S) TestSetEnvHandlerShouldSetADoublePrivateEnvironmentVariableInTheApp(
 
 func (s *S) TestSetEnvHandlerShouldSetMultipleEnvironmentVariablesInTheApp(c *check.C) {
 	a := app.App{Name: "vigil", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3439,7 +3509,7 @@ func (s *S) TestSetEnvHandlerShouldSetMultipleEnvironmentVariablesInTheApp(c *ch
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("vigil")
+	app, err := app.GetByName(context.TODO(), "vigil")
 	c.Assert(err, check.IsNil)
 	expectedHost := bind.EnvVar{Name: "DATABASE_HOST", Value: "localhost", Public: true}
 	expectedUser := bind.EnvVar{Name: "DATABASE_USER", Value: "root", Public: true}
@@ -3493,7 +3563,7 @@ func (s *S) TestSetEnvHandlerShouldNotChangeValueOfServiceVariables(c *check.C) 
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	a, err = app.GetByName("losers")
+	a, err = app.GetByName(context.TODO(), "losers")
 	c.Assert(err, check.IsNil)
 	envs := a.Envs()
 	delete(envs, app.TsuruServicesEnvVar)
@@ -3520,7 +3590,7 @@ func (s *S) TestSetEnvHandlerShouldNotChangeValueOfServiceVariables(c *check.C) 
 
 func (s *S) TestSetEnvHandlerNoRestart(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	d := apiTypes.Envs{
 		Envs: []struct{ Name, Value, Alias string }{
@@ -3541,7 +3611,7 @@ func (s *S) TestSetEnvHandlerNoRestart(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("black-dog")
+	app, err := app.GetByName(context.TODO(), "black-dog")
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{Name: "DATABASE_HOST", Value: "localhost", Public: true}
 	c.Assert(app.Env["DATABASE_HOST"], check.DeepEquals, expected)
@@ -3634,7 +3704,7 @@ func (s *S) TestSetEnvHandlerReturnsForbiddenIfTheGivenUserDoesNotHaveAccessToTh
 
 func (s *S) TestSetEnvInvalidEnvName(c *check.C) {
 	a := app.App{Name: "black-dog", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/env", a.Name)
 	d := apiTypes.Envs{
@@ -3677,7 +3747,7 @@ func (s *S) TestUnsetEnv(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("swift")
+	app, err := app.GetByName(context.TODO(), "swift")
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Env, check.DeepEquals, expected)
 	c.Assert(recorder.Body.String(), check.Matches,
@@ -3718,7 +3788,7 @@ func (s *S) TestUnsetEnvNoRestart(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("swift")
+	app, err := app.GetByName(context.TODO(), "swift")
 	c.Assert(err, check.IsNil)
 	c.Assert(app.Env, check.DeepEquals, expected)
 	c.Assert(recorder.Body.String(), check.Matches,
@@ -3757,7 +3827,7 @@ func (s *S) TestUnsetEnvHandlerRemovesAllGivenEnvironmentVariables(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("let-it-be")
+	app, err := app.GetByName(context.TODO(), "let-it-be")
 	c.Assert(err, check.IsNil)
 	expected := map[string]bind.EnvVar{
 		"DATABASE_PASSWORD": {
@@ -3800,7 +3870,7 @@ func (s *S) TestUnsetHandlerRemovesPrivateVariables(c *check.C) {
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
 	c.Assert(recorder.Header().Get("Content-Type"), check.Equals, "application/x-json-stream")
-	app, err := app.GetByName("letitbe")
+	app, err := app.GetByName(context.TODO(), "letitbe")
 	c.Assert(err, check.IsNil)
 	expected := map[string]bind.EnvVar{}
 	c.Assert(app.Env, check.DeepEquals, expected)
@@ -3851,7 +3921,7 @@ func (s *S) TestUnsetEnvUserDoesNotHaveAccessToTheApp(c *check.C) {
 	c.Assert(err, check.IsNil)
 	request.Header.Set("Authorization", "b "+token.GetValue())
 	recorder := httptest.NewRecorder()
-	err = s.provisioner.Provision(&a)
+	err = s.provisioner.Provision(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusForbidden)
@@ -3859,7 +3929,7 @@ func (s *S) TestUnsetEnvUserDoesNotHaveAccessToTheApp(c *check.C) {
 
 func (s *S) TestAddCName(c *check.C) {
 	a := app.App{Name: "leper", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/cname", a.Name)
 	b := strings.NewReader("cname=leper.secretcompany.com&cname=blog.tsuru.com")
@@ -3870,7 +3940,7 @@ func (s *S) TestAddCName(c *check.C) {
 	recorder := httptest.NewRecorder()
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.CName, check.DeepEquals, []string{"leper.secretcompany.com", "blog.tsuru.com"})
 	c.Assert(eventtest.EventDesc{
@@ -3886,7 +3956,7 @@ func (s *S) TestAddCName(c *check.C) {
 
 func (s *S) TestAddCNameAcceptsWildCard(c *check.C) {
 	a := app.App{Name: "leper", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/cname", a.Name)
 	b := strings.NewReader("cname=*.leper.secretcompany.com")
@@ -3897,7 +3967,7 @@ func (s *S) TestAddCNameAcceptsWildCard(c *check.C) {
 	request.Header.Set("Authorization", "b "+s.token.GetValue())
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.CName, check.DeepEquals, []string{"*.leper.secretcompany.com"})
 	c.Assert(eventtest.EventDesc{
@@ -3913,7 +3983,7 @@ func (s *S) TestAddCNameAcceptsWildCard(c *check.C) {
 
 func (s *S) TestAddCNameErrsOnInvalidCName(c *check.C) {
 	a := app.App{Name: "leper", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/cname", a.Name)
 	b := strings.NewReader("cname=_leper.secretcompany.com")
@@ -3939,7 +4009,7 @@ func (s *S) TestAddCNameErrsOnInvalidCName(c *check.C) {
 
 func (s *S) TestAddCNameHandlerReturnsBadRequestWhenCNameIsEmpty(c *check.C) {
 	a := app.App{Name: "leper", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("POST", "/apps/leper/cname", strings.NewReader("cname="))
 	c.Assert(err, check.IsNil)
@@ -3963,7 +4033,7 @@ func (s *S) TestAddCNameHandlerReturnsBadRequestWhenCNameIsEmpty(c *check.C) {
 
 func (s *S) TestAddCNameHandlerReturnsBadRequestWhenCNameIsMissing(c *check.C) {
 	a := app.App{Name: "leper", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	bodies := []io.Reader{nil, strings.NewReader("")}
 	for _, b := range bodies {
@@ -3991,7 +4061,7 @@ func (s *S) TestAddCNameHandlerUnknownApp(c *check.C) {
 
 func (s *S) TestAddCNameHandlerUserWithoutAccessToTheApp(c *check.C) {
 	a := app.App{Name: "lost", Platform: "vougan", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/apps/%s/cname", a.Name)
 	b := strings.NewReader("cname=lost.secretcompany.com")
@@ -4014,7 +4084,7 @@ func (s *S) TestRemoveCNameHandler(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.AddCName("foo.bar.com")
 	c.Assert(err, check.IsNil)
@@ -4025,7 +4095,7 @@ func (s *S) TestRemoveCNameHandler(c *check.C) {
 	recorder := httptest.NewRecorder()
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.CName, check.DeepEquals, []string{})
 	c.Assert(eventtest.EventDesc{
@@ -4045,7 +4115,7 @@ func (s *S) TestRemoveCNameTwoCnames(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.AddCName("foo.bar.com")
 	c.Assert(err, check.IsNil)
@@ -4058,7 +4128,7 @@ func (s *S) TestRemoveCNameTwoCnames(c *check.C) {
 	recorder := httptest.NewRecorder()
 	s.testServer.ServeHTTP(recorder, request)
 	c.Assert(recorder.Code, check.Equals, http.StatusOK)
-	app, err := app.GetByName(a.Name)
+	app, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(app.CName, check.DeepEquals, []string{})
 	c.Assert(eventtest.EventDesc{
@@ -4160,7 +4230,7 @@ func (s *S) TestAppLogReturnsBadRequestIfNumberOfLinesIsNotAnInteger(c *check.C)
 
 func (s *S) TestAppLogFollow(c *check.C) {
 	a := app.App{Name: "lost1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	path := "/apps/something/log/?:app=" + a.Name + "&lines=10&follow=1"
 	request, err := http.NewRequest("GET", path, nil)
@@ -4209,7 +4279,7 @@ func (s *S) TestAppLogFollow(c *check.C) {
 
 func (s *S) TestAppLogFollowWithFilter(c *check.C) {
 	a := app.App{Name: "lost2", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	path := "/apps/something/log/?:app=" + a.Name + "&lines=10&follow=1&source=web"
 	request, err := http.NewRequest("GET", path, nil)
@@ -4260,7 +4330,7 @@ func (s *S) TestAppLogFollowWithFilter(c *check.C) {
 
 func (s *S) TestAppLogShouldHaveContentType(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppReadLog,
@@ -4277,7 +4347,7 @@ func (s *S) TestAppLogShouldHaveContentType(c *check.C) {
 
 func (s *S) TestAppLogSelectByLines(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 15; i++ {
 		servicemanager.AppLog.Add(a.Name, strconv.Itoa(i), "source", "")
@@ -4301,7 +4371,7 @@ func (s *S) TestAppLogSelectByLines(c *check.C) {
 
 func (s *S) TestAppLogAllowNegativeLines(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 15; i++ {
 		servicemanager.AppLog.Add(a.Name, strconv.Itoa(i), "source", "")
@@ -4325,7 +4395,7 @@ func (s *S) TestAppLogAllowNegativeLines(c *check.C) {
 
 func (s *S) TestAppLogExplicitZeroLines(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 15; i++ {
 		servicemanager.AppLog.Add(a.Name, strconv.Itoa(i), "source", "")
@@ -4349,7 +4419,7 @@ func (s *S) TestAppLogExplicitZeroLines(c *check.C) {
 
 func (s *S) TestAppLogSelectBySource(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(a.Name, "mars log", "mars", "")
 	servicemanager.AppLog.Add(a.Name, "earth log", "earth", "")
@@ -4375,7 +4445,7 @@ func (s *S) TestAppLogSelectBySource(c *check.C) {
 
 func (s *S) TestAppLogSelectBySourceInvert(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(a.Name, "mars log", "mars", "")
 	servicemanager.AppLog.Add(a.Name, "earth log", "earth", "")
@@ -4401,7 +4471,7 @@ func (s *S) TestAppLogSelectBySourceInvert(c *check.C) {
 
 func (s *S) TestAppLogSelectByUnit(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(a.Name, "mars log", "mars", "prospero")
 	servicemanager.AppLog.Add(a.Name, "mars log", "mars", "mahnmut")
@@ -4430,21 +4500,13 @@ func (s *S) TestAppLogSelectByUnit(c *check.C) {
 	c.Assert(logs[1].Unit, check.Equals, "caliban")
 }
 
-func (s *S) TestAppLogSelectByLinesShouldReturnTheLastestEntries(c *check.C) {
+func (s *S) TestAppLogSelectByLinesShouldReturnTheLatestEntries(c *check.C) {
 	a := app.App{Name: "lost", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
-	c.Assert(err, check.IsNil)
-	now := time.Now()
-	coll, err := s.logConn.CreateAppLogCollection(a.Name)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	for i := 0; i < 15; i++ {
-		l := appTypes.Applog{
-			Date:    now.Add(time.Duration(i) * time.Hour),
-			Message: strconv.Itoa(i),
-			Source:  "source",
-			AppName: a.Name,
-		}
-		coll.Insert(l)
+		err = servicemanager.AppLog.Add(a.Name, strconv.Itoa(i), "source", "unit")
+		c.Assert(err, check.IsNil)
 	}
 	token := userWithPermission(c, permission.Permission{
 		Scheme:  permission.PermAppReadLog,
@@ -4469,15 +4531,15 @@ func (s *S) TestAppLogSelectByLinesShouldReturnTheLastestEntries(c *check.C) {
 
 func (s *S) TestAppLogShouldReturnLogByApp(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(app1.Name, "app1 log", "source", "")
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(app2.Name, "app2 log", "sourc ", "")
 	app3 := app.App{Name: "app3", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app3, s.user)
+	err = app.CreateApp(context.TODO(), &app3, s.user)
 	c.Assert(err, check.IsNil)
 	servicemanager.AppLog.Add(app3.Name, "app3 log", "tsuru", "")
 	token := userWithPermission(c, permission.Permission{
@@ -4526,9 +4588,9 @@ func (s *S) TestBindHandlerEndpointIsDown(c *check.C) {
 		TeamOwner: s.team.Name,
 		Env:       map[string]bind.EnvVar{},
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	v := url.Values{}
 	v.Set("noRestart", "false")
@@ -4576,10 +4638,10 @@ func (s *S) TestBindHandler(c *check.C) {
 		TeamOwner: s.team.Name,
 		Env:       map[string]bind.EnvVar{},
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	s.provisioner.PrepareOutput([]byte("exported"))
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	b := strings.NewReader("noRestart=false")
@@ -4640,7 +4702,7 @@ func (s *S) TestBindHandlerReturns400IfServiceIsBlacklistedAndItsTheOnlyService(
 	})
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "pain-gaming", Platform: "zend", TeamOwner: s.team.Name, Env: map[string]bind.EnvVar{}}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	v := url.Values{}
@@ -4675,7 +4737,7 @@ func (s *S) TestBindHandlerReturns400IfServiceIsBlacklistedAndMoreServicesAvaila
 	err = service.Create(srvc2)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "pain-gaming", Platform: "zend", TeamOwner: s.team.Name, Env: map[string]bind.EnvVar{}}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	v := url.Values{}
@@ -4712,9 +4774,9 @@ func (s *S) TestBindHandlerWithoutEnvsDontRestartTheApp(c *check.C) {
 		TeamOwner: s.team.Name,
 		Env:       map[string]bind.EnvVar{},
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	v := url.Values{}
 	v.Set("noRestart", "false")
@@ -4772,9 +4834,9 @@ func (s *S) TestBindHandlerErrorShowsStatusMessage(c *check.C) {
 		TeamOwner: s.team.Name,
 		Env:       map[string]bind.EnvVar{},
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance.ServiceName, instance.Name, a.Name)
 	v := url.Values{}
 	v.Set("noRestart", "false")
@@ -4790,7 +4852,7 @@ func (s *S) TestBindHandlerErrorShowsStatusMessage(c *check.C) {
 
 func (s *S) TestBindHandlerReturns404IfTheInstanceDoesNotExist(c *check.C) {
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/unknown/instances/unknown/%s?:instance=unknown&:app=%s&:service=unknown&noRestart=false", a.Name, a.Name)
 	request, err := http.NewRequest("PUT", url, nil)
@@ -4821,7 +4883,7 @@ func (s *S) TestBindHandlerReturns403IfUserIsNotTeamOwner(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/%s/instances/%s/%s?:service=%s&:instance=%s&:app=%s&noRestart=false", instance.ServiceName, instance.Name,
 		a.Name, instance.ServiceName, instance.Name, a.Name)
@@ -4847,7 +4909,7 @@ func (s *S) TestBindHandlerReturns403IfTheUserDoesNotHaveAccessToTheInstance(c *
 	err := s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/%s/instances/%s/%s?:instance=%s&:app=%s&:service=%s&noRestart=false", instance.ServiceName,
 		instance.Name, a.Name, instance.Name, a.Name, instance.ServiceName)
@@ -4937,9 +4999,9 @@ func (s *S) TestBindWithManyInstanceNameWithSameNameAndNoRestartFlag(c *check.C)
 		TeamOwner: s.team.Name,
 		Env:       map[string]bind.EnvVar{},
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	u := fmt.Sprintf("/services/%s/instances/%s/%s", instance2.ServiceName, instance2.Name, a.Name)
 	v := url.Values{}
 	v.Set("noRestart", "true")
@@ -5004,12 +5066,12 @@ func (s *S) TestUnbindHandler(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := s.provisioner.Units(&a)
+	units, err := s.provisioner.Units(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	instance := service.ServiceInstance{
 		Name:        "my-mysql",
@@ -5020,7 +5082,7 @@ func (s *S) TestUnbindHandler(c *check.C) {
 	}
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
-	otherApp, err := app.GetByName(a.Name)
+	otherApp, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	otherApp.ServiceEnvs = append(otherApp.ServiceEnvs, bind.ServiceEnvVar{
 		EnvVar: bind.EnvVar{
@@ -5043,7 +5105,7 @@ func (s *S) TestUnbindHandler(c *check.C) {
 	err = s.conn.ServiceInstances().Find(bson.M{"name": instance.Name}).One(&instance)
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.Apps, check.DeepEquals, []string{})
-	otherApp, err = app.GetByName(a.Name)
+	otherApp, err = app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{
 		Name:  "MY_VAR",
@@ -5103,11 +5165,11 @@ func (s *S) TestUnbindNoRestartFlag(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := s.provisioner.Units(&a)
+	units, err := s.provisioner.Units(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	instance := service.ServiceInstance{
 		Name:        "my-mysql",
@@ -5118,7 +5180,7 @@ func (s *S) TestUnbindNoRestartFlag(c *check.C) {
 	}
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
-	otherApp, err := app.GetByName(a.Name)
+	otherApp, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	otherApp.ServiceEnvs = append(otherApp.ServiceEnvs, bind.ServiceEnvVar{
 		EnvVar: bind.EnvVar{
@@ -5141,7 +5203,7 @@ func (s *S) TestUnbindNoRestartFlag(c *check.C) {
 	err = s.conn.ServiceInstances().Find(bson.M{"name": instance.Name}).One(&instance)
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.Apps, check.DeepEquals, []string{})
-	otherApp, err = app.GetByName(a.Name)
+	otherApp, err = app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{
 		Name:  "MY_VAR",
@@ -5200,12 +5262,12 @@ func (s *S) TestUnbindForceFlag(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := s.provisioner.Units(&a)
+	units, err := s.provisioner.Units(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	instance := service.ServiceInstance{
 		Name:        "my-mysql",
@@ -5216,7 +5278,7 @@ func (s *S) TestUnbindForceFlag(c *check.C) {
 	}
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
-	otherApp, err := app.GetByName(a.Name)
+	otherApp, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	otherApp.ServiceEnvs = append(otherApp.ServiceEnvs, bind.ServiceEnvVar{
 		EnvVar: bind.EnvVar{
@@ -5249,7 +5311,7 @@ func (s *S) TestUnbindForceFlag(c *check.C) {
 	err = s.conn.ServiceInstances().Find(bson.M{"name": instance.Name}).One(&instance)
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.Apps, check.DeepEquals, []string{})
-	otherApp, err = app.GetByName(a.Name)
+	otherApp, err = app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	expected := bind.EnvVar{
 		Name:  "MY_VAR",
@@ -5290,11 +5352,11 @@ func (s *S) TestUnbindForceFlagUnauthorized(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := s.provisioner.Units(&a)
+	units, err := s.provisioner.Units(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	instance := service.ServiceInstance{
 		Name:        "my-mysql",
@@ -5343,11 +5405,11 @@ func (s *S) TestUnbindWithSameInstanceName(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := s.provisioner.Units(&a)
+	units, err := s.provisioner.Units(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	instances := []service.ServiceInstance{
 		{
@@ -5387,7 +5449,7 @@ func (s *S) TestUnbindWithSameInstanceName(c *check.C) {
 
 func (s *S) TestUnbindHandlerReturns404IfTheInstanceDoesNotExist(c *check.C) {
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/instances/unknown/%s?:instance=unknown&:app=%s&noRestart=false", a.Name, a.Name)
 	request, err := http.NewRequest("PUT", url, nil)
@@ -5413,7 +5475,7 @@ func (s *S) TestUnbindHandlerReturns403IfTheUserDoesNotHaveAccessToTheInstance(c
 	err := s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/%s/instances/%s/%s?:service=%s&:instance=%s&:app=%s&noRestart=false", instance.ServiceName, instance.Name,
 		a.Name, instance.ServiceName, instance.Name, a.Name)
@@ -5444,7 +5506,7 @@ func (s *S) TestUnbindHandlerReturns403IfUserIsNotTeamOwner(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	a := app.App{Name: "serviceapp", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	url := fmt.Sprintf("/services/%s/instances/%s/%s?:service=%s&:instance=%s&:app=%s&noRestart=false", instance.ServiceName, instance.Name,
 		a.Name, instance.ServiceName, instance.Name, a.Name)
@@ -5509,7 +5571,7 @@ func (s *S) TestRestartHandler(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	url := fmt.Sprintf("/apps/%s/restart", a.Name)
@@ -5542,7 +5604,7 @@ func (s *S) TestRestartHandlerSingleProcess(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	url := fmt.Sprintf("/apps/%s/restart", a.Name)
@@ -5612,7 +5674,7 @@ func (s *S) TestSleepHandler(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	url := fmt.Sprintf("/apps/%s/sleep", a.Name)
@@ -5647,7 +5709,7 @@ func (s *S) TestSleepHandlerReturns400IfTheProxyIsNotSet(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("POST", "/apps/stress/sleep?:app=stress", nil)
 	c.Assert(err, check.IsNil)
@@ -5698,7 +5760,7 @@ func (l LogList) Less(i, j int) bool { return l[i].Message < l[j].Message }
 
 func (s *S) TestAddLog(c *check.C) {
 	a := app.App{Name: "myapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	v := url.Values{}
 	v.Add("message", "message 1")
@@ -5740,7 +5802,7 @@ func (s *S) TestAddLog(c *check.C) {
 		"mysource",
 		"mysource",
 	}
-	logs, err := a.LastLogs(servicemanager.AppLog, appTypes.ListLogArgs{
+	logs, err := a.LastLogs(context.TODO(), servicemanager.AppLog, appTypes.ListLogArgs{
 		Limit: 5,
 		Token: token,
 	})
@@ -5758,9 +5820,9 @@ func (s *S) TestAddLog(c *check.C) {
 
 func (s *S) TestGetApp(c *check.C) {
 	a := app.App{Name: "testapp", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	expected, err := app.GetByName(a.Name)
+	expected, err := app.GetByName(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	r, err := http.NewRequest(http.MethodGet, "", nil)
 	c.Assert(err, check.IsNil)
@@ -5771,10 +5833,10 @@ func (s *S) TestGetApp(c *check.C) {
 
 func (s *S) TestSwap(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("app1=app1&app2=app2&cnameOnly=false")
 	request, err := http.NewRequest("POST", "/swap", b)
@@ -5808,10 +5870,10 @@ func (s *S) TestSwap(c *check.C) {
 
 func (s *S) TestSwapCnameOnly(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("app1=app1&app2=app2&cnameOnly=true")
 	request, err := http.NewRequest("POST", "/swap", b)
@@ -5845,7 +5907,7 @@ func (s *S) TestSwapCnameOnly(c *check.C) {
 
 func (s *S) TestSwapApp1Locked(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	_, err = event.NewInternal(&event.Opts{
 		Target:       event.Target{Type: event.TargetTypeApp, Value: app1.GetName()},
@@ -5854,7 +5916,7 @@ func (s *S) TestSwapApp1Locked(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("app1=app1&app2=app2&cnameOnly=false")
 	request, err := http.NewRequest("POST", "/swap", b)
@@ -5869,10 +5931,10 @@ func (s *S) TestSwapApp1Locked(c *check.C) {
 
 func (s *S) TestSwapApp2Locked(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	_, err = event.NewInternal(&event.Opts{
 		Target:       event.Target{Type: event.TargetTypeApp, Value: app2.GetName()},
@@ -5895,12 +5957,12 @@ func (s *S) TestSwapIncompatiblePlatforms(c *check.C) {
 	app1 := app.App{Name: "app1", Teams: []string{s.team.Name}, Platform: "x"}
 	err := s.conn.Apps().Insert(&app1)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&app1)
+	err = s.provisioner.Provision(context.TODO(), &app1)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Teams: []string{s.team.Name}, Platform: "y"}
 	err = s.conn.Apps().Insert(&app2)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&app2)
+	err = s.provisioner.Provision(context.TODO(), &app2)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("app1=app1&app2=app2&cnameOnly=false")
 	request, err := http.NewRequest("POST", "/swap", b)
@@ -5931,12 +5993,12 @@ func (s *S) TestSwapIncompatibleUnits(c *check.C) {
 	app1 := app.App{Name: "app1", Teams: []string{s.team.Name}, Platform: "x"}
 	err := s.conn.Apps().Insert(&app1)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&app1)
+	err = s.provisioner.Provision(context.TODO(), &app1)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Teams: []string{s.team.Name}, Platform: "x"}
 	err = s.conn.Apps().Insert(&app2)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&app2)
+	err = s.provisioner.Provision(context.TODO(), &app2)
 	c.Assert(err, check.IsNil)
 	s.provisioner.AddUnit(&app2, provision.Unit{})
 	b := strings.NewReader("app1=app1&app2=app2&cnameOnly=false")
@@ -5952,10 +6014,10 @@ func (s *S) TestSwapIncompatibleUnits(c *check.C) {
 
 func (s *S) TestSwapIncompatibleAppsForceSwap(c *check.C) {
 	app1 := app.App{Name: "app1", Platform: "x", TeamOwner: s.team.Name}
-	err := app.CreateApp(&app1, s.user)
+	err := app.CreateApp(context.TODO(), &app1, s.user)
 	c.Assert(err, check.IsNil)
 	app2 := app.App{Name: "app2", Platform: "y", TeamOwner: s.team.Name}
-	err = app.CreateApp(&app2, s.user)
+	err = app.CreateApp(context.TODO(), &app2, s.user)
 	c.Assert(err, check.IsNil)
 	b := strings.NewReader("app1=app1&app2=app2&force=true&cnameOnly=false")
 	request, err := http.NewRequest("POST", "/swap", b)
@@ -5976,7 +6038,7 @@ func (s *S) TestStartHandler(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	url := fmt.Sprintf("/apps/%s/start", a.Name)
@@ -6009,7 +6071,7 @@ func (s *S) TestStartHandler(c *check.C) {
 
 func (s *S) TestStopHandler(c *check.C) {
 	a := app.App{Name: "stress", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	url := fmt.Sprintf("/apps/%s/stop", a.Name)
@@ -6062,9 +6124,9 @@ func (s *S) TestRegisterUnit(c *check.C) {
 		},
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
@@ -6102,7 +6164,7 @@ func (s *S) TestRegisterUnitInvalidUnit(c *check.C) {
 	}
 	err := s.conn.Apps().Insert(a)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&a)
+	err = s.provisioner.Provision(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	body := strings.NewReader("hostname=invalid-unit-host")
 	request, err := http.NewRequest("POST", "/apps/myappx/units/register", body)
@@ -6126,7 +6188,7 @@ func (s *S) TestRegisterUnitOutdatedDeployAgent(c *check.C) {
 	}
 	err := s.conn.Apps().Insert(a)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.Provision(&a)
+	err = s.provisioner.Provision(context.TODO(), &a)
 	c.Assert(err, check.IsNil)
 	body := strings.NewReader("hostname=invalid-unit-host")
 	request, err := http.NewRequest("POST", "/apps/myappx/units/register", body)
@@ -6158,9 +6220,9 @@ func (s *S) TestRegisterUnitOtherUA(c *check.C) {
 		},
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
@@ -6183,9 +6245,9 @@ func (s *S) TestRegisterUnitWithCustomData(c *check.C) {
 		},
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	err = s.provisioner.AddUnits(&a, 1, "web", nil, nil)
+	err = s.provisioner.AddUnits(context.TODO(), &a, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
@@ -6231,7 +6293,7 @@ func (s *S) TestMetricEnvs(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a, s.user)
+	err = app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	request, err := http.NewRequest("GET", "/apps/myappx/metric/envs", nil)
 	c.Assert(err, check.IsNil)
@@ -6270,10 +6332,10 @@ func (s *S) TestMetricEnvsWhenAppDoesNotExist(c *check.C) {
 
 func (s *S) TestRebuildRoutes(c *check.C) {
 	a := app.App{Name: "myappx", Platform: "zend", TeamOwner: s.team.Name, Router: "fake"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.Provision(&a)
-	err = routertest.FakeRouter.AddRoutes(a.Name, []*url.URL{
+	s.provisioner.Provision(context.TODO(), &a)
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), a.Name, []*url.URL{
 		{Host: "h1"},
 	})
 	c.Assert(err, check.IsNil)
@@ -6337,7 +6399,7 @@ func (s *S) TestRebuildRoutes(c *check.C) {
 
 func (s *S) TestSetCertificate(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	v := url.Values{}
 	v.Set("cname", "app.io")
@@ -6365,7 +6427,7 @@ func (s *S) TestSetCertificate(c *check.C) {
 
 func (s *S) TestSetCertificateInvalidCname(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	v := url.Values{}
 	v.Set("cname", "app2.io")
@@ -6384,7 +6446,7 @@ func (s *S) TestSetCertificateInvalidCname(c *check.C) {
 
 func (s *S) TestSetCertificateInvalidCertificate(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"myapp.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	v := url.Values{}
 	v.Set("cname", "myapp.io")
@@ -6403,7 +6465,7 @@ func (s *S) TestSetCertificateInvalidCertificate(c *check.C) {
 
 func (s *S) TestSetCertificateNonSupportedRouter(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	v := url.Values{}
 	v.Set("cname", "app.io")
@@ -6422,7 +6484,7 @@ func (s *S) TestSetCertificateNonSupportedRouter(c *check.C) {
 
 func (s *S) TestUnsetCertificate(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.SetCertificate("app.io", testCert, testKey)
 	c.Assert(err, check.IsNil)
@@ -6446,7 +6508,7 @@ func (s *S) TestUnsetCertificate(c *check.C) {
 
 func (s *S) TestUnsetCertificateWithoutCName(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.SetCertificate("app.io", testCert, testKey)
 	c.Assert(err, check.IsNil)
@@ -6462,7 +6524,7 @@ func (s *S) TestUnsetCertificateWithoutCName(c *check.C) {
 
 func (s *S) TestUnsetCertificateInvalidCName(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.SetCertificate("app.io", testCert, testKey)
 	c.Assert(err, check.IsNil)
@@ -6478,7 +6540,7 @@ func (s *S) TestUnsetCertificateInvalidCName(c *check.C) {
 
 func (s *S) TestListCertificates(c *check.C) {
 	a := app.App{Name: "myapp", TeamOwner: s.team.Name, CName: []string{"app.io"}, Router: "fake-tls"}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = a.SetCertificate("app.io", testCert, testKey)
 	c.Assert(err, check.IsNil)
@@ -6512,13 +6574,13 @@ func (e *fakeEncoder) Encode(msg interface{}) error {
 
 func (s *S) TestFollowLogs(c *check.C) {
 	a := app.App{Name: "lost1", Platform: "zend", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	ctx, cancel := context.WithCancel(context.Background())
 	enc := &fakeEncoder{
 		done: make(chan struct{}),
 	}
-	l, err := servicemanager.AppLog.Watch(appTypes.ListLogArgs{
+	l, err := servicemanager.AppLog.Watch(context.TODO(), appTypes.ListLogArgs{
 		AppName: a.Name,
 		Token:   s.token,
 	})

@@ -26,13 +26,13 @@ func (p *kubernetesProvisioner) GetClient(a provision.App) (provision.BuilderKub
 
 type KubeClient struct{}
 
-func (c *KubeClient) BuildPod(a provision.App, evt *event.Event, archiveFile io.Reader, version appTypes.AppVersion) error {
-	baseImage, err := image.GetBuildImage(a)
+func (c *KubeClient) BuildPod(ctx context.Context, a provision.App, evt *event.Event, archiveFile io.Reader, version appTypes.AppVersion) error {
+	baseImage, err := image.GetBuildImage(ctx, a)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	buildPodName := buildPodNameForApp(a, version)
-	client, err := clusterForPool(a.GetPool())
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return err
 	}
@@ -51,19 +51,16 @@ func (c *KubeClient) BuildPod(a provision.App, evt *event.Event, archiveFile io.
 		attachOutput:      evt,
 		inputFile:         "/home/application/archive.tar.gz",
 	}
-	ctx, cancel := evt.CancelableContext(context.Background())
-	err = createBuildPod(ctx, params)
-	cancel()
-	return err
+	return createBuildPod(ctx, params)
 }
 
-func (c *KubeClient) ImageTagPushAndInspect(a provision.App, evt *event.Event, oldImage string, version appTypes.AppVersion) (provision.InspectData, error) {
-	client, err := clusterForPool(a.GetPool())
+func (c *KubeClient) ImageTagPushAndInspect(ctx context.Context, a provision.App, evt *event.Event, oldImage string, version appTypes.AppVersion) (provision.InspectData, error) {
+	client, err := clusterForPool(ctx, a.GetPool())
 	if err != nil {
 		return provision.InspectData{}, err
 	}
 	deployPodName := deployPodNameForApp(a, version)
-	labels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	labels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: a,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			IsBuild:     true,
@@ -81,8 +78,6 @@ func (c *KubeClient) ImageTagPushAndInspect(a provision.App, evt *event.Event, o
 	if tag != "latest" {
 		destImages = append(destImages, fmt.Sprintf("%s:latest", repository))
 	}
-	ctx, cancel := evt.CancelableContext(context.Background())
-	defer cancel()
 	err = runInspectSidecar(ctx, inspectParams{
 		client:            client,
 		stdout:            stdout,
@@ -115,16 +110,14 @@ func (c *KubeClient) ImageTagPushAndInspect(a provision.App, evt *event.Event, o
 	return data, err
 }
 
-func (c *KubeClient) DownloadFromContainer(app provision.App, evt *event.Event, imageName string) (io.ReadCloser, error) {
-	client, err := clusterForPool(app.GetPool())
+func (c *KubeClient) DownloadFromContainer(ctx context.Context, app provision.App, evt *event.Event, imageName string) (io.ReadCloser, error) {
+	client, err := clusterForPool(ctx, app.GetPool())
 	if err != nil {
 		return nil, err
 	}
 	reader, writer := io.Pipe()
 	stderr := &bytes.Buffer{}
-	ctx, cancel := evt.CancelableContext(context.Background())
 	go func() {
-		defer cancel()
 		opts := execOpts{
 			client:       client,
 			app:          app,
@@ -144,9 +137,9 @@ func (c *KubeClient) DownloadFromContainer(app provision.App, evt *event.Event, 
 	return reader, nil
 }
 
-func (c *KubeClient) BuildImage(name string, images []string, inputStream io.Reader, output io.Writer, ctx context.Context) error {
+func (c *KubeClient) BuildImage(ctx context.Context, name string, images []string, inputStream io.Reader, output io.Writer) error {
 	buildPodName := fmt.Sprintf("%s-image-build", name)
-	client, err := clusterForPoolOrAny("")
+	client, err := clusterForPoolOrAny(ctx, "")
 	if err != nil {
 		return err
 	}

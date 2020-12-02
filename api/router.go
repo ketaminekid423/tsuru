@@ -17,7 +17,133 @@ import (
 	"github.com/tsuru/tsuru/servicemanager"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	permTypes "github.com/tsuru/tsuru/types/permission"
+	routerTypes "github.com/tsuru/tsuru/types/router"
 )
+
+// title: router add
+// path: /routers
+// method: POST
+// responses:
+//   201: Created
+//   400: Invalid router
+//   409: Router already exists
+func addRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
+	var dynamicRouter routerTypes.DynamicRouter
+	err = ParseInput(r, &dynamicRouter)
+	if err != nil {
+		return err
+	}
+
+	allowed := permission.Check(t, permission.PermRouterCreate)
+	if !allowed {
+		return permission.ErrUnauthorized
+	}
+
+	_, err = servicemanager.DynamicRouter.Get(ctx, dynamicRouter.Name)
+	if err == nil {
+		return &errors.HTTP{Code: http.StatusConflict, Message: "dynamic router already exists"}
+	}
+
+	evt, err := event.New(&event.Opts{
+		Target:     event.Target{Type: event.TargetTypeRouter, Value: dynamicRouter.Name},
+		Kind:       permission.PermRouterCreate,
+		Owner:      t,
+		CustomData: event.FormToCustomData(InputFields(r)),
+		Allowed:    event.Allowed(permission.PermRouterReadEvents, permTypes.PermissionContext{CtxType: permTypes.CtxRouter, Value: dynamicRouter.Name}),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { evt.Done(err) }()
+	err = servicemanager.DynamicRouter.Create(ctx, dynamicRouter)
+	if err == nil {
+		w.WriteHeader(http.StatusCreated)
+	}
+	return err
+}
+
+// title: router update
+// path: /routers/{name}
+// method: PUT
+// responses:
+//   200: OK
+//   400: Invalid router
+//   404: Router not found
+func updateRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
+	var dynamicRouter routerTypes.DynamicRouter
+
+	routerName := r.URL.Query().Get(":name")
+	err = ParseInput(r, &dynamicRouter)
+	if err != nil {
+		return err
+	}
+	dynamicRouter.Name = routerName
+
+	allowed := permission.Check(t, permission.PermRouterUpdate, permTypes.PermissionContext{CtxType: permTypes.CtxRouter, Value: dynamicRouter.Name})
+	if !allowed {
+		return permission.ErrUnauthorized
+	}
+
+	evt, err := event.New(&event.Opts{
+		Target:     event.Target{Type: event.TargetTypeRouter, Value: dynamicRouter.Name},
+		Kind:       permission.PermRouterUpdate,
+		Owner:      t,
+		CustomData: event.FormToCustomData(InputFields(r)),
+		Allowed:    event.Allowed(permission.PermRouterReadEvents, permTypes.PermissionContext{CtxType: permTypes.CtxRouter, Value: dynamicRouter.Name}),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { evt.Done(err) }()
+
+	err = servicemanager.DynamicRouter.Update(ctx, dynamicRouter)
+	if err != nil {
+		if err == routerTypes.ErrDynamicRouterNotFound {
+			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
+		}
+		return err
+	}
+	return nil
+}
+
+// title: router delete
+// path: /routers/{name}
+// method: DELETE
+// responses:
+//   200: OK
+//   404: Router not found
+func deleteRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
+	routerName := r.URL.Query().Get(":name")
+
+	allowed := permission.Check(t, permission.PermRouterDelete, permTypes.PermissionContext{CtxType: permTypes.CtxRouter, Value: routerName})
+	if !allowed {
+		return permission.ErrUnauthorized
+	}
+
+	evt, err := event.New(&event.Opts{
+		Target:     event.Target{Type: event.TargetTypeRouter, Value: routerName},
+		Kind:       permission.PermRouterDelete,
+		Owner:      t,
+		CustomData: event.FormToCustomData(InputFields(r)),
+		Allowed:    event.Allowed(permission.PermRouterReadEvents, permTypes.PermissionContext{CtxType: permTypes.CtxRouter, Value: routerName}),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { evt.Done(err) }()
+
+	err = servicemanager.DynamicRouter.Remove(ctx, routerName)
+	if err != nil {
+		if err == routerTypes.ErrDynamicRouterNotFound {
+			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
+		}
+		return err
+	}
+	return nil
+}
 
 // title: router list
 // path: /routers
@@ -27,6 +153,7 @@ import (
 //   200: OK
 //   204: No content
 func listRouters(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	contexts := permission.ContextsForPermission(t, permission.PermAppCreate)
 	var teams []string
 	var global bool
@@ -40,7 +167,7 @@ contexts:
 			teams = append(teams, c.Value)
 		}
 	}
-	routers, err := router.ListWithInfo()
+	routers, err := router.ListWithInfo(ctx)
 	if err != nil {
 		return err
 	}
@@ -48,7 +175,7 @@ contexts:
 	if !global {
 		routersAllowed := make(map[string]struct{})
 		filteredRouters = []router.PlanRouter{}
-		pools, err := pool.ListPossiblePools(teams)
+		pools, err := pool.ListPossiblePools(ctx, teams)
 		if err != nil {
 			return err
 		}
@@ -65,6 +192,12 @@ contexts:
 			if _, ok := routersAllowed[r.Name]; ok {
 				filteredRouters = append(filteredRouters, r)
 			}
+		}
+	}
+	isRouterCreator := permission.Check(t, permission.PermRouterCreate)
+	if !isRouterCreator {
+		for i := range filteredRouters {
+			filteredRouters[i].Config = nil
 		}
 	}
 	if len(filteredRouters) == 0 {
@@ -84,6 +217,7 @@ contexts:
 //   404: App or router not found
 //   400: Invalid request
 func addAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	var appRouter appTypes.AppRouter
 	err = ParseInput(r, &appRouter)
 	if err != nil {
@@ -94,7 +228,7 @@ func addAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err err
 	if err != nil {
 		return err
 	}
-	_, err = router.Get(appRouter.Name)
+	_, err = router.Get(ctx, appRouter.Name)
 	if err != nil {
 		if _, isNotFound := err.(*router.ErrRouterNotFound); isNotFound {
 			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
@@ -108,7 +242,7 @@ func addAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err err
 		return permission.ErrUnauthorized
 	}
 
-	p, err := pool.GetPoolByName(a.Pool)
+	p, err := pool.GetPoolByName(ctx, a.Pool)
 	if err != nil {
 		return err
 	}
@@ -143,6 +277,7 @@ func addAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err err
 //   404: App or router not found
 //   400: Invalid request
 func updateAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	var appRouter appTypes.AppRouter
 	err = ParseInput(r, &appRouter)
 	if err != nil {
@@ -155,7 +290,7 @@ func updateAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err 
 	if err != nil {
 		return err
 	}
-	_, err = router.Get(appRouter.Name)
+	_, err = router.Get(ctx, appRouter.Name)
 	if err != nil {
 		if _, isNotFound := err.(*router.ErrRouterNotFound); isNotFound {
 			return &errors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
@@ -169,7 +304,7 @@ func updateAppRouter(w http.ResponseWriter, r *http.Request, t auth.Token) (err 
 		return permission.ErrUnauthorized
 	}
 
-	p, err := pool.GetPoolByName(a.Pool)
+	p, err := pool.GetPoolByName(ctx, a.Pool)
 	if err != nil {
 		return err
 	}
@@ -278,6 +413,7 @@ type setRoutableRequest struct {
 //   401: Not authorized
 //   404: App not found
 func appSetRoutable(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	var args setRoutableRequest
 	err = ParseInput(r, &args)
 	if err != nil {
@@ -305,12 +441,12 @@ func appSetRoutable(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	version, err := servicemanager.AppVersion.VersionByImageOrVersion(&a, args.Version)
+	version, err := servicemanager.AppVersion.VersionByImageOrVersion(ctx, &a, args.Version)
 	if err != nil {
-		if _, ok := err.(appTypes.ErrInvalidVersion); ok {
+		if appTypes.IsInvalidVersionError(err) {
 			return &errors.HTTP{Code: http.StatusBadRequest, Message: err.Error()}
 		}
 		return err
 	}
-	return a.SetRoutable(version, args.IsRoutable)
+	return a.SetRoutable(ctx, version, args.IsRoutable)
 }

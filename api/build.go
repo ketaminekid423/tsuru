@@ -32,6 +32,7 @@ import (
 //   403: Forbidden
 //   404: Not found
 func build(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	tag := InputValue(r, "tag")
 	if tag == "" {
 		return &tsuruErrors.HTTP{
@@ -57,7 +58,7 @@ func build(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 	} else {
 		userName = t.GetUserName()
 	}
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
@@ -85,11 +86,14 @@ func build(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 	}
 	var imageID string
 	defer func() { evt.DoneCustomData(err, map[string]string{"image": imageID}) }()
+	ctx, cancel := evt.CancelableContext(opts.App.Context())
+	defer cancel()
+	opts.App.ReplaceContext(ctx)
 	opts.Event = evt
 	writer := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "please wait...")
 	defer writer.Stop()
 	opts.OutputStream = writer
-	imageID, err = app.Build(opts)
+	imageID, err = app.Build(ctx, opts)
 	if err == nil {
 		fmt.Fprintln(w, imageID)
 		fmt.Fprintln(w, "OK")

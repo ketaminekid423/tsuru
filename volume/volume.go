@@ -5,6 +5,7 @@
 package volume
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -62,7 +63,7 @@ func (v *Volume) UnmarshalPlan(result interface{}) error {
 	return errors.WithStack(json.Unmarshal(jsonData, result))
 }
 
-func (v *Volume) validateNew() error {
+func (v *Volume) validateNew(ctx context.Context) error {
 	if v.Name == "" {
 		return errors.New("volume name cannot be empty")
 	}
@@ -72,15 +73,15 @@ func (v *Volume) validateNew() error {
 			"starting with a letter."
 		return errors.WithStack(&tsuruErrors.ValidationError{Message: msg})
 	}
-	return v.validate()
+	return v.validate(ctx)
 }
 
-func (v *Volume) validate() error {
-	p, err := pool.GetPoolByName(v.Pool)
+func (v *Volume) validate(ctx context.Context) error {
+	p, err := pool.GetPoolByName(ctx, v.Pool)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	_, err = servicemanager.Team.FindByName(v.TeamOwner)
+	_, err = servicemanager.Team.FindByName(ctx, v.TeamOwner)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -100,24 +101,24 @@ func (v *Volume) validate() error {
 	return nil
 }
 
-func (v *Volume) Create() error {
-	err := v.validateNew()
+func (v *Volume) Create(ctx context.Context) error {
+	err := v.validateNew(ctx)
 	if err != nil {
 		return err
 	}
-	return v.save()
+	return v.save(ctx)
 }
 
-func (v *Volume) Update() error {
-	err := v.validate()
+func (v *Volume) Update(ctx context.Context) error {
+	err := v.validate(ctx)
 	if err != nil {
 		return err
 	}
-	return v.save()
+	return v.save(ctx)
 }
 
-func (v *Volume) save() error {
-	isProv, err := v.isProvisioned()
+func (v *Volume) save(ctx context.Context) error {
+	isProv, err := v.isProvisioned(ctx)
 	if err != nil {
 		return err
 	}
@@ -133,8 +134,8 @@ func (v *Volume) save() error {
 	return errors.WithStack(err)
 }
 
-func (v *Volume) isProvisioned() (bool, error) {
-	p, err := pool.GetPoolByName(v.Pool)
+func (v *Volume) isProvisioned(ctx context.Context) (bool, error) {
+	p, err := pool.GetPoolByName(ctx, v.Pool)
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
@@ -146,7 +147,7 @@ func (v *Volume) isProvisioned() (bool, error) {
 	if !ok {
 		return false, errors.New("provisioner is not a volume provisioner")
 	}
-	isProv, err := volProv.IsVolumeProvisioned(v.Name, v.Pool)
+	isProv, err := volProv.IsVolumeProvisioned(ctx, v.Name, v.Pool)
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
@@ -223,7 +224,7 @@ func (v *Volume) LoadBinds() ([]VolumeBind, error) {
 	return binds, nil
 }
 
-func (v *Volume) Delete() error {
+func (v *Volume) Delete(ctx context.Context) error {
 	binds, err := v.LoadBinds()
 	if err != nil {
 		return err
@@ -231,7 +232,7 @@ func (v *Volume) Delete() error {
 	if len(binds) > 0 {
 		return errors.New("cannot delete volume with existing binds")
 	}
-	p, err := pool.GetPoolByName(v.Pool)
+	p, err := pool.GetPoolByName(ctx, v.Pool)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -240,7 +241,7 @@ func (v *Volume) Delete() error {
 		return errors.WithStack(err)
 	}
 	if volProv, ok := prov.(provision.VolumeProvisioner); ok {
-		err = volProv.DeleteVolume(v.Name, v.Pool)
+		err = volProv.DeleteVolume(ctx, v.Name, v.Pool)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -355,7 +356,7 @@ func volumePlanKey(planName, provisioner string) string {
 	return fmt.Sprintf("volume-plans:%s:%s", planName, provisioner)
 }
 
-func RenameTeam(oldName, newName string) error {
+func RenameTeam(ctx context.Context, oldName, newName string) error {
 	conn, err := db.Conn()
 	if err != nil {
 		return err

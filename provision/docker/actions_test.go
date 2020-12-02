@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -248,8 +249,8 @@ func (s *S) TestAddNewRouteForward(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont1 := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.1", HostPort: "1234"}}
 	cont2 := container.Container{Container: types.Container{ID: "ble-2", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.2", HostPort: "4321"}}
 	cont3 := container.Container{Container: types.Container{ID: "ble-3", AppName: app.GetName(), ProcessName: "worker", HostAddr: "127.0.0.3", HostPort: "8080"}}
@@ -282,8 +283,8 @@ func (s *S) TestAddNewRouteForward(c *check.C) {
 
 func (s *S) TestAddNewRouteForwardNoWeb(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	version, err := newVersionForApp(s.p, app, map[string]interface{}{
 		"processes": map[string]interface{}{
 			"api": "python myapi.py",
@@ -316,8 +317,8 @@ func (s *S) TestAddNewRouteForwardNoWeb(c *check.C) {
 
 func (s *S) TestAddNewRouteForwardFailInMiddle(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	version, err := newVersionForApp(s.p, app, nil)
 	c.Assert(err, check.IsNil)
 	cont := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "addr1", HostPort: "4321"}}
@@ -346,8 +347,8 @@ func (s *S) TestAddNewRouteForwardFailInMiddle(c *check.C) {
 
 func (s *S) TestAddNewRouteForwardDoesNotAddWhenHostPortIsZero(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	version, err := newVersionForApp(s.p, app, nil)
 	c.Assert(err, check.IsNil)
 	cont := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "addr1", HostPort: "0"}}
@@ -371,8 +372,8 @@ func (s *S) TestAddNewRouteForwardDoesNotAddWhenHostPortIsZero(c *check.C) {
 
 func (s *S) TestAddNewRouteForwardDoesNotAddWhenHostPortIsEmpty(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	version, err := newVersionForApp(s.p, app, nil)
 	c.Assert(err, check.IsNil)
 	cont := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "addr1", HostPort: ""}}
@@ -396,15 +397,15 @@ func (s *S) TestAddNewRouteForwardDoesNotAddWhenHostPortIsEmpty(c *check.C) {
 
 func (s *S) TestAddNewRouteBackward(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont1 := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.1", HostPort: "1234"}}
 	cont2 := container.Container{Container: types.Container{ID: "ble-2", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.2", HostPort: "4321"}}
 	cont3 := container.Container{Container: types.Container{ID: "ble-3", AppName: app.GetName(), ProcessName: "worker", HostAddr: "127.0.0.3", HostPort: "8080"}}
 	defer cont1.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 	defer cont2.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 	defer cont3.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
-	err := routertest.FakeRouter.AddRoutes(app.GetName(), []*url.URL{cont1.Address(), cont2.Address()})
+	err := routertest.FakeRouter.AddRoutes(context.TODO(), app.GetName(), []*url.URL{cont1.Address(), cont2.Address()})
 	c.Assert(err, check.IsNil)
 	args := changeUnitsPipelineArgs{
 		app:         app,
@@ -434,8 +435,8 @@ func (s *S) TestSetRouterHealthcheckForward(c *check.C) {
 	}
 	version, err := newVersionForApp(s.p, app, customData)
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	args := changeUnitsPipelineArgs{
 		app:         app,
 		provisioner: s.p,
@@ -465,8 +466,8 @@ func (s *S) TestSetRouterHealthcheckForwardNoUseInRouter(c *check.C) {
 	}
 	version, err := newVersionForApp(s.p, app, customData)
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	args := changeUnitsPipelineArgs{
 		app:         app,
 		provisioner: s.p,
@@ -494,8 +495,8 @@ func (s *S) TestSetRouterHealthcheckBackward(c *check.C) {
 	}
 	version, err := newVersionForApp(s.p, app, customData)
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	args := changeUnitsPipelineArgs{
 		app:         app,
 		provisioner: s.p,
@@ -532,15 +533,15 @@ func (s *S) TestRemoveOldRoutesForward(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = oldVersion.CommitSuccessful()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont1 := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.1", HostPort: "1234"}}
 	cont2 := container.Container{Container: types.Container{ID: "ble-2", AppName: app.GetName(), ProcessName: "web", HostAddr: "127.0.0.2", HostPort: "4321"}}
 	cont3 := container.Container{Container: types.Container{ID: "ble-3", AppName: app.GetName(), ProcessName: "worker", HostAddr: "127.0.0.3", HostPort: "8080"}}
 	defer cont1.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 	defer cont2.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 	defer cont3.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
-	err = routertest.FakeRouter.AddRoutes(app.GetName(), []*url.URL{cont1.Address(), cont2.Address()})
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), app.GetName(), []*url.URL{cont1.Address(), cont2.Address()})
 	c.Assert(err, check.IsNil)
 	args := changeUnitsPipelineArgs{
 		app:         app,
@@ -563,14 +564,14 @@ func (s *S) TestRemoveOldRoutesForward(c *check.C) {
 
 func (s *S) TestRemoveOldRoutesForwardNoImageData(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: app,
 	})
 	c.Assert(err, check.IsNil)
-	err = servicemanager.AppVersion.DeleteVersion(app.GetName(), version.Version())
+	err = servicemanager.AppVersion.DeleteVersionIDs(context.TODO(), app.GetName(), []int{version.Version()})
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont1 := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "", HostAddr: "127.0.0.1", HostPort: ""}}
 	args := changeUnitsPipelineArgs{
 		app:         app,
@@ -599,13 +600,13 @@ func (s *S) TestRemoveOldRoutesForwardFailInMiddle(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = oldVersion.CommitSuccessful()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web", HostAddr: "addr1", HostPort: "1234"}}
 	cont2 := container.Container{Container: types.Container{ID: "ble-2", AppName: app.GetName(), ProcessName: "web", HostAddr: "addr2", HostPort: "1234"}}
 	defer cont.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 	defer cont2.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
-	err = routertest.FakeRouter.AddRoutes(app.GetName(), []*url.URL{cont.Address(), cont2.Address()})
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), app.GetName(), []*url.URL{cont.Address(), cont2.Address()})
 	c.Assert(err, check.IsNil)
 	routertest.FakeRouter.FailForIp(cont2.Address().String())
 	args := changeUnitsPipelineArgs{
@@ -626,8 +627,8 @@ func (s *S) TestRemoveOldRoutesForwardFailInMiddle(c *check.C) {
 
 func (s *S) TestRemoveOldRoutesBackward(c *check.C) {
 	app := provisiontest.NewFakeApp("myapp", "python", 1)
-	routertest.FakeRouter.AddBackend(app)
-	defer routertest.FakeRouter.RemoveBackend(app.GetName())
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), app.GetName())
 	cont := container.Container{Container: types.Container{ID: "ble-1", AppName: app.GetName(), ProcessName: "web"}}
 	cont2 := container.Container{Container: types.Container{ID: "ble-2", AppName: app.GetName(), ProcessName: "web"}}
 	defer cont.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
@@ -717,11 +718,12 @@ func (s *S) TestProvisionAddUnitsToHostName(c *check.C) {
 }
 
 func (s *S) TestProvisionAddUnitsToHostForward(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	app := provisiontest.NewFakeApp("myapp-2", "python", 0)
-	defer p.Destroy(app)
-	p.Provision(app)
+	defer p.Destroy(ctx, app)
+	p.Provision(ctx, app)
 	coll := p.Collection()
 	defer coll.Close()
 	coll.Insert(container.Container{Container: types.Container{ID: "container-id", AppName: app.GetName(), Version: "container-version", Image: "tsuru/python"}})
@@ -750,11 +752,12 @@ func (s *S) TestProvisionAddUnitsToHostForward(c *check.C) {
 }
 
 func (s *S) TestProvisionAddUnitsToHostForwardWithoutHost(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	app := provisiontest.NewFakeApp("myapp-2", "python", 0)
-	defer p.Destroy(app)
-	p.Provision(app)
+	defer p.Destroy(ctx, app)
+	p.Provision(ctx, app)
 	coll := p.Collection()
 	defer coll.Close()
 	version, err := newVersionForApp(s.p, app, nil)
@@ -786,9 +789,10 @@ func (s *S) TestProvisionAddUnitsToHostForwardWithoutHost(c *check.C) {
 }
 
 func (s *S) TestProvisionAddUnitsToHostBackward(c *check.C) {
+	ctx := context.TODO()
 	app := provisiontest.NewFakeApp("myapp-xxx-1", "python", 0)
-	defer s.p.Destroy(app)
-	s.p.Provision(app)
+	defer s.p.Destroy(ctx, app)
+	s.p.Provision(ctx, app)
 	_, err := newVersionForApp(s.p, app, nil)
 	c.Assert(err, check.IsNil)
 	coll := s.p.Collection()
@@ -815,7 +819,7 @@ func (s *S) TestProvisionRemoveOldUnitsName(c *check.C) {
 func (s *S) TestProvisionRemoveOldUnitsForward(c *check.C) {
 	cont, err := s.newContainer(nil, nil)
 	c.Assert(err, check.IsNil)
-	defer routertest.FakeRouter.RemoveBackend(cont.AppName)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), cont.AppName)
 	client, err := docker.NewClient(s.server.URL())
 	c.Assert(err, check.IsNil)
 	err = client.StartContainer(cont.ID, nil)
@@ -844,7 +848,7 @@ func (s *S) TestProvisionUnbindOldUnitsName(c *check.C) {
 func (s *S) TestProvisionUnbindOldUnitsForward(c *check.C) {
 	cont, err := s.newContainer(nil, nil)
 	c.Assert(err, check.IsNil)
-	defer routertest.FakeRouter.RemoveBackend(cont.AppName)
+	defer routertest.FakeRouter.RemoveBackend(context.TODO(), cont.AppName)
 	client, err := docker.NewClient(s.server.URL())
 	c.Assert(err, check.IsNil)
 	err = client.StartContainer(cont.ID, nil)
@@ -965,6 +969,7 @@ func (s *S) TestBindAndHealthcheckName(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckForward(c *check.C) {
+	ctx := context.TODO()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/x/y" {
 			w.WriteHeader(http.StatusOK)
@@ -983,8 +988,8 @@ func (s *S) TestBindAndHealthcheckForward(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(appName, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -997,7 +1002,7 @@ func (s *S) TestBindAndHealthcheckForward(c *check.C) {
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}, "worker": {Quantity: 1}},
 		version:     version,
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 3)
 	url, _ := url.Parse(server.URL)
@@ -1020,6 +1025,7 @@ func (s *S) TestBindAndHealthcheckForward(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckForwardBindUnitError(c *check.C) {
+	ctx := context.TODO()
 	appName := "my-fake-app"
 	customData := map[string]interface{}{
 		"processes": map[string]interface{}{
@@ -1028,8 +1034,8 @@ func (s *S) TestBindAndHealthcheckForwardBindUnitError(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(appName, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1045,7 +1051,7 @@ func (s *S) TestBindAndHealthcheckForwardBindUnitError(c *check.C) {
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}, "worker": {Quantity: 1}},
 		version:     version,
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 3)
 	var bindCounter int32
@@ -1063,12 +1069,13 @@ func (s *S) TestBindAndHealthcheckForwardBindUnitError(c *check.C) {
 	resultContainers := result.([]container.Container)
 	c.Assert(resultContainers, check.DeepEquals, containers)
 	c.Assert(atomic.LoadInt32(&bindCounter), check.Equals, int32(3))
-	si, err := service.GetServiceInstance("mysql", "my-mysql")
+	si, err := service.GetServiceInstance(ctx, "mysql", "my-mysql")
 	c.Assert(err, check.IsNil)
 	c.Assert(si.BoundUnits, check.HasLen, 1)
 }
 
 func (s *S) TestBindAndHealthcheckDontHealtcheckForErroredApps(c *check.C) {
+	ctx := context.TODO()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -1086,8 +1093,8 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForErroredApps(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(dbApp.Name, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1106,7 +1113,7 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForErroredApps(c *check.C) {
 		version:     version,
 		toRemove:    []container.Container{*oldContainer},
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 2)
 	url, _ := url.Parse(server.URL)
@@ -1127,6 +1134,7 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForErroredApps(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckDontHealtcheckForStoppedApps(c *check.C) {
+	ctx := context.TODO()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -1144,8 +1152,8 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForStoppedApps(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(dbApp.Name, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1164,7 +1172,7 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForStoppedApps(c *check.C) {
 		version:     version,
 		toRemove:    []container.Container{*oldContainer},
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 2)
 	url, _ := url.Parse(server.URL)
@@ -1185,6 +1193,7 @@ func (s *S) TestBindAndHealthcheckDontHealtcheckForStoppedApps(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckForwardHealthcheckError(c *check.C) {
+	ctx := context.TODO()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -1202,8 +1211,8 @@ func (s *S) TestBindAndHealthcheckForwardHealthcheckError(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(dbApp.Name, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1216,7 +1225,7 @@ func (s *S) TestBindAndHealthcheckForwardHealthcheckError(c *check.C) {
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		version:     version,
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 2)
 	url, _ := url.Parse(server.URL)
@@ -1235,6 +1244,7 @@ func (s *S) TestBindAndHealthcheckForwardHealthcheckError(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckForwardRestartError(c *check.C) {
+	ctx := context.TODO()
 	s.server.CustomHandler("/exec/.*/json", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ID":"id","ExitCode":9}`))
@@ -1253,8 +1263,8 @@ func (s *S) TestBindAndHealthcheckForwardRestartError(c *check.C) {
 		},
 	}
 	fakeApp := provisiontest.NewFakeApp(dbApp.Name, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, customData)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1267,7 +1277,7 @@ func (s *S) TestBindAndHealthcheckForwardRestartError(c *check.C) {
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		version:     version,
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 2)
 	context := action.FWContext{Params: []interface{}{args}, Previous: containers}
@@ -1280,10 +1290,11 @@ func (s *S) TestBindAndHealthcheckForwardRestartError(c *check.C) {
 }
 
 func (s *S) TestBindAndHealthcheckBackward(c *check.C) {
+	ctx := context.TODO()
 	appName := "my-fake-app"
 	fakeApp := provisiontest.NewFakeApp(appName, "python", 0)
-	s.p.Provision(fakeApp)
-	defer s.p.Destroy(fakeApp)
+	s.p.Provision(ctx, fakeApp)
+	defer s.p.Destroy(ctx, fakeApp)
 	version, err := newVersionForApp(s.p, fakeApp, nil)
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
@@ -1296,7 +1307,7 @@ func (s *S) TestBindAndHealthcheckBackward(c *check.C) {
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		version:     version,
 	}
-	containers, err := addContainersWithHost(&args)
+	containers, err := addContainersWithHost(context.TODO(), &args)
 	c.Assert(err, check.IsNil)
 	c.Assert(containers, check.HasLen, 2)
 	context := action.BWContext{Params: []interface{}{args}, FWResult: containers}

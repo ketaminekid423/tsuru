@@ -5,8 +5,19 @@
 package app
 
 import (
+	"context"
 	"net/url"
 )
+
+type App interface {
+	GetName() string
+	GetPool() string
+	GetTeamOwner() string
+	GetPlatform() string
+	GetPlatformVersion() string
+	GetDeploys() uint
+	GetUpdatePlatform() bool
+}
 
 type AppRouter struct {
 	Name         string            `json:"name"`
@@ -22,4 +33,8 @@ type RoutableAddresses struct {
 	Prefix    string
 	Addresses []*url.URL
 	ExtraData map[string]string
+}
+
+type AppService interface {
+	GetByName(ctx context.Context, name string) (App, error)
 }

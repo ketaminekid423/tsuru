@@ -5,6 +5,7 @@
 package main
 
 import (
+	stdContext "context"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -15,6 +16,7 @@ import (
 	_ "github.com/tsuru/tsuru/auth/oauth"
 	"github.com/tsuru/tsuru/cmd"
 	"github.com/tsuru/tsuru/permission"
+	_ "github.com/tsuru/tsuru/storage/mongodb"
 	permTypes "github.com/tsuru/tsuru/types/permission"
 )
 
@@ -56,7 +58,7 @@ func (createRootUserCmd) Run(context *cmd.Context, client *cmd.Client) error {
 			return errors.New("Passwords didn't match.")
 		}
 	}
-	user, err = app.AuthScheme.Create(&auth.User{
+	user, err = app.AuthScheme.Create(stdContext.Background(), &auth.User{
 		Email:    email,
 		Password: password,
 	})
@@ -109,7 +111,7 @@ func (tokenCmd) Run(context *cmd.Context, client *cmd.Client) error {
 	if err != nil {
 		return err
 	}
-	t, err := app.AuthScheme.AppLogin(app.InternalAppName)
+	t, err := app.AuthScheme.AppLogin(stdContext.TODO(), app.InternalAppName)
 	if err != nil {
 		return err
 	}

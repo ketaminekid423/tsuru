@@ -5,6 +5,7 @@
 package version
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 type appVersionService struct {
 	storage appTypes.AppVersionStorage
 }
+
+var _ appTypes.AppVersionService = &appVersionService{}
 
 func AppVersionService() (appTypes.AppVersionService, error) {
 	dbDriver, err := storage.GetCurrentDbDriver()
@@ -29,8 +32,8 @@ func AppVersionService() (appTypes.AppVersionService, error) {
 	}, nil
 }
 
-func (s *appVersionService) NewAppVersion(args appTypes.NewVersionArgs) (appTypes.AppVersion, error) {
-	versionInfo, err := s.storage.NewAppVersion(args)
+func (s *appVersionService) NewAppVersion(ctx context.Context, args appTypes.NewVersionArgs) (appTypes.AppVersion, error) {
+	versionInfo, err := s.storage.NewAppVersion(ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -41,8 +44,8 @@ func (s *appVersionService) NewAppVersion(args appTypes.NewVersionArgs) (appType
 	}, nil
 }
 
-func (s *appVersionService) LatestSuccessfulVersion(app appTypes.App) (appTypes.AppVersion, error) {
-	versions, err := s.storage.AppVersions(app)
+func (s *appVersionService) LatestSuccessfulVersion(ctx context.Context, app appTypes.App) (appTypes.AppVersion, error) {
+	versions, err := s.storage.AppVersions(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +63,8 @@ func (s *appVersionService) LatestSuccessfulVersion(app appTypes.App) (appTypes.
 	return nil, appTypes.ErrNoVersionsAvailable
 }
 
-func (s *appVersionService) VersionByPendingImage(app appTypes.App, imageID string) (appTypes.AppVersion, error) {
-	versions, err := s.storage.AppVersions(app)
+func (s *appVersionService) VersionByPendingImage(ctx context.Context, app appTypes.App, imageID string) (appTypes.AppVersion, error) {
+	versions, err := s.storage.AppVersions(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -78,8 +81,8 @@ func (s *appVersionService) VersionByPendingImage(app appTypes.App, imageID stri
 	return nil, appTypes.ErrNoVersionsAvailable
 }
 
-func (s *appVersionService) VersionByImageOrVersion(app appTypes.App, imageOrVersion string) (appTypes.AppVersion, error) {
-	versions, err := s.storage.AppVersions(app)
+func (s *appVersionService) VersionByImageOrVersion(ctx context.Context, app appTypes.App, imageOrVersion string) (appTypes.AppVersion, error) {
+	versions, err := s.storage.AppVersions(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -98,24 +101,33 @@ func (s *appVersionService) VersionByImageOrVersion(app appTypes.App, imageOrVer
 	return nil, appTypes.ErrInvalidVersion{Version: imageOrVersion}
 }
 
-func (s *appVersionService) AppVersions(app appTypes.App) (appTypes.AppVersions, error) {
-	return s.storage.AppVersions(app)
+func (s *appVersionService) AppVersions(ctx context.Context, app appTypes.App) (appTypes.AppVersions, error) {
+	return s.storage.AppVersions(ctx, app)
 }
 
-func (s *appVersionService) DeleteVersions(appName string) error {
-	return s.storage.DeleteVersions(appName)
+func (s *appVersionService) DeleteVersions(ctx context.Context, appName string, opts ...*appTypes.AppVersionWriteOptions) error {
+	return s.storage.DeleteVersions(ctx, appName, opts...)
 }
 
-func (s *appVersionService) AllAppVersions() ([]appTypes.AppVersions, error) {
-	return s.storage.AllAppVersions()
+func (s *appVersionService) AllAppVersions(ctx context.Context, appNamesFilter ...string) ([]appTypes.AppVersions, error) {
+	return s.storage.AllAppVersions(ctx, appNamesFilter...)
 }
 
-func (s *appVersionService) DeleteVersion(appName string, version int) error {
-	return s.storage.DeleteVersion(appName, version)
+func (s *appVersionService) DeleteVersionIDs(ctx context.Context, appName string, versions []int, opts ...*appTypes.AppVersionWriteOptions) error {
+	return s.storage.DeleteVersionIDs(ctx, appName, versions, opts...)
 }
 
-func (s *appVersionService) AppVersionFromInfo(app appTypes.App, info appTypes.AppVersionInfo) appTypes.AppVersion {
+func (s *appVersionService) MarkToRemoval(ctx context.Context, appName string, opts ...*appTypes.AppVersionWriteOptions) error {
+	return s.storage.MarkToRemoval(ctx, appName, opts...)
+}
+
+func (s *appVersionService) MarkVersionsToRemoval(ctx context.Context, appName string, versions []int, opts ...*appTypes.AppVersionWriteOptions) error {
+	return s.storage.MarkVersionsToRemoval(ctx, appName, versions, opts...)
+}
+
+func (s *appVersionService) AppVersionFromInfo(ctx context.Context, app appTypes.App, info appTypes.AppVersionInfo) appTypes.AppVersion {
 	return &appVersionImpl{
+		ctx:         ctx,
 		app:         app,
 		storage:     s.storage,
 		versionInfo: &info,

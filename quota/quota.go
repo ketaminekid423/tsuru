@@ -5,6 +5,8 @@
 package quota
 
 import (
+	"context"
+
 	"github.com/tsuru/tsuru/types/quota"
 )
 
@@ -13,8 +15,12 @@ type QuotaService struct {
 }
 
 // Inc implements Inc method from QuotaService interface
-func (s *QuotaService) Inc(appName string, quantity int) error {
-	quota, err := s.Storage.Get(appName)
+func (s *QuotaService) Inc(ctx context.Context, item quota.QuotaItem, quantity int) error {
+	quota, err := s.Storage.Get(ctx, item.GetName())
+	if err != nil {
+		return err
+	}
+	err = s.fixInUse(item, quota)
 	if err != nil {
 		return err
 	}
@@ -22,7 +28,7 @@ func (s *QuotaService) Inc(appName string, quantity int) error {
 	if err != nil {
 		return err
 	}
-	return s.Storage.Inc(appName, quantity)
+	return s.Storage.Set(ctx, item.GetName(), quota.InUse+quantity)
 }
 
 func (s *QuotaService) checkLimit(q *quota.Quota, quantity int) error {
@@ -38,13 +44,17 @@ func (s *QuotaService) checkLimit(q *quota.Quota, quantity int) error {
 	return nil
 }
 
-// SetLimit redefines the limit of the app. The new limit must be bigger
-// than or equal to the current number of units in the app. The new limit may be
-// smaller than 0, which means that the app should have an unlimited number of
-// units.
-// SetLimit implements SetLimit method from QuotaService interface
-func (s *QuotaService) SetLimit(appName string, limit int) error {
-	q, err := s.Storage.Get(appName)
+// SetLimit redefines the limit of the named resource. The new limit must be
+// bigger than or equal to the current isUse. The new
+// limit may be smaller than 0, which means that the app should have an
+// unlimited number of units. SetLimit implements SetLimit method from
+// QuotaService interface
+func (s *QuotaService) SetLimit(ctx context.Context, item quota.QuotaItem, limit int) error {
+	q, err := s.Storage.Get(ctx, item.GetName())
+	if err != nil {
+		return err
+	}
+	err = s.fixInUse(item, q)
 	if err != nil {
 		return err
 	}
@@ -53,14 +63,14 @@ func (s *QuotaService) SetLimit(appName string, limit int) error {
 	} else if limit < q.InUse {
 		return quota.ErrLimitLowerThanAllocated
 	}
-	return s.Storage.SetLimit(appName, limit)
+	return s.Storage.SetLimit(ctx, item.GetName(), limit)
 }
 
-// Set redefines the inuse units of the app. This new value must be smaller
-// than or equal to the current limit of the app. It also must be a non negative number.
-// Set implements Set method from QuotaService interface
-func (s *QuotaService) Set(appName string, inUse int) error {
-	q, err := s.Storage.Get(appName)
+// Set redefines the inuse value for the named resource. This new value must be
+// smaller than or equal to the current limit. It also must be a non negative
+// number.
+func (s *QuotaService) Set(ctx context.Context, item quota.QuotaItem, inUse int) error {
+	q, err := s.Storage.Get(ctx, item.GetName())
 	if err != nil {
 		return err
 	}
@@ -73,10 +83,25 @@ func (s *QuotaService) Set(appName string, inUse int) error {
 			Available: uint(q.Limit),
 		}
 	}
-	return s.Storage.Set(appName, inUse)
+	return s.Storage.Set(ctx, item.GetName(), inUse)
 }
 
-// Get implements Get method from QuotaService interface
-func (s *QuotaService) Get(appName string) (*quota.Quota, error) {
-	return s.Storage.Get(appName)
+func (s *QuotaService) Get(ctx context.Context, item quota.QuotaItem) (*quota.Quota, error) {
+	q, err := s.Storage.Get(ctx, item.GetName())
+	if err != nil {
+		return nil, err
+	}
+	err = s.fixInUse(item, q)
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+func (s *QuotaService) fixInUse(item quota.QuotaItem, q *quota.Quota) error {
+	var err error
+	if inuse, ok := item.(quota.QuotaItemInUse); ok {
+		q.InUse, err = inuse.GetQuotaInUse()
+	}
+	return err
 }

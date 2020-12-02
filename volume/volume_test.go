@@ -5,6 +5,7 @@
 package volume
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -73,13 +74,13 @@ func (p *volumeProvisioner) GetName() string {
 	return "volumeprov"
 }
 
-func (p *volumeProvisioner) DeleteVolume(volName, pool string) error {
+func (p *volumeProvisioner) DeleteVolume(ctx context.Context, volName, pool string) error {
 	p.deleteCallVolume = volName
 	p.deleteCallPool = pool
 	return nil
 }
 
-func (p *volumeProvisioner) IsVolumeProvisioned(name, pool string) (bool, error) {
+func (p *volumeProvisioner) IsVolumeProvisioned(ctx context.Context, name, pool string) (bool, error) {
 	return p.isProvisioned, nil
 }
 
@@ -97,12 +98,12 @@ func (s *S) SetUpTest(c *check.C) {
 	defer conn.Close()
 	dbtest.ClearAllCollections(conn.Apps().Database)
 	provisiontest.ProvisionerInstance.Reset()
-	err = pool.AddPool(pool.AddPoolOptions{
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "mypool",
 		Provisioner: "fake",
 	})
 	c.Assert(err, check.IsNil)
-	err = pool.AddPool(pool.AddPoolOptions{
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "otherpool",
 		Provisioner: "fake",
 	})
@@ -129,7 +130,7 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	err = conn.Volumes().Database.DropDatabase()
+	err = dbtest.ClearAllCollections(conn.Volumes().Database)
 	c.Assert(err, check.IsNil)
 }
 
@@ -157,13 +158,13 @@ volume-plans:
 		Plugin       string
 		StorageClass string `json:"storage-class"`
 	}
-	err := pool.AddPool(pool.AddPoolOptions{
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "mypool2",
 		Provisioner: "other",
 	})
 	c.Assert(err, check.IsNil)
 	v1 := Volume{Name: "v1", Pool: "mypool", TeamOwner: "myteam", Plan: VolumePlan{Name: "nfs"}}
-	err = v1.validate()
+	err = v1.validate(context.TODO())
 	c.Assert(err, check.IsNil)
 	var resultFake fakePlan
 	err = v1.UnmarshalPlan(&resultFake)
@@ -175,7 +176,7 @@ volume-plans:
 		},
 	})
 	v1.Plan.Name = "ebs"
-	err = v1.validate()
+	err = v1.validate(context.TODO())
 	c.Assert(err, check.IsNil)
 	resultFake = fakePlan{}
 	err = v1.UnmarshalPlan(&resultFake)
@@ -185,7 +186,7 @@ volume-plans:
 	})
 	v1.Plan.Name = "nfs"
 	v1.Pool = "mypool2"
-	err = v1.validate()
+	err = v1.validate(context.TODO())
 	c.Assert(err, check.IsNil)
 	var resultFakeOther fakeOtherPlan
 	err = v1.UnmarshalPlan(&resultFakeOther)
@@ -194,7 +195,7 @@ volume-plans:
 		Plugin: "nfs",
 	})
 	v1.Plan.Name = "ebs"
-	err = v1.validate()
+	err = v1.validate(context.TODO())
 	c.Assert(err, check.IsNil)
 	resultFakeOther = fakeOtherPlan{}
 	err = v1.UnmarshalPlan(&resultFakeOther)
@@ -252,7 +253,7 @@ func (s *S) TestVolumeCreateLoad(c *check.C) {
 		},
 	}
 	for i, tt := range tests {
-		err := tt.v.Create()
+		err := tt.v.Create(context.TODO())
 		if tt.err != "" {
 			c.Assert(err, check.ErrorMatches, tt.err)
 			continue
@@ -321,7 +322,7 @@ func (s *S) TestVolumeUpdateLoad(c *check.C) {
 		},
 	}
 	for i, tt := range tests {
-		err := tt.v.Update()
+		err := tt.v.Update(context.TODO())
 		if tt.err != "" {
 			c.Assert(err, check.ErrorMatches, tt.err)
 			continue
@@ -353,7 +354,7 @@ func (s *S) TestVolumeBindApp(c *check.C) {
 		Pool:      "mypool",
 		TeamOwner: "myteam",
 	}
-	err := v.Create()
+	err := v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	err = v.BindApp("myapp", "/mnt1", true)
 	c.Assert(err, check.IsNil)
@@ -375,7 +376,7 @@ func (s *S) TestVolumeBindAppMultipleMounts(c *check.C) {
 		Pool:      "mypool",
 		TeamOwner: "myteam",
 	}
-	err := v.Create()
+	err := v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	err = v.BindApp("myapp", "/mnt1", false)
 	c.Assert(err, check.IsNil)
@@ -402,7 +403,7 @@ func (s *S) TestLoadBindsForApp(c *check.C) {
 		Pool:      "mypool",
 		TeamOwner: "myteam",
 	}
-	err := v.Create()
+	err := v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	err = v.BindApp("myapp", "/mnt1", false)
 	c.Assert(err, check.IsNil)
@@ -428,7 +429,7 @@ func (s *S) TestVolumeUnbindApp(c *check.C) {
 		Pool:      "mypool",
 		TeamOwner: "myteam",
 	}
-	err := v.Create()
+	err := v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	err = v.BindApp("myapp", "/mnt1", true)
 	c.Assert(err, check.IsNil)
@@ -473,7 +474,7 @@ func (s *S) TestListByApp(c *check.C) {
 		{ID: VolumeBindID{App: "app3", MountPoint: "/mnt1", Volume: "v3"}, ReadOnly: false},
 	}
 	for i, v := range volumes {
-		err := v.Create()
+		err := v.Create(context.TODO())
 		c.Assert(err, check.IsNil)
 		volumes[i].Plan.Opts = map[string]interface{}{
 			"driver": "local",
@@ -510,9 +511,9 @@ func (s *S) TestVolumeDelete(c *check.C) {
 		Pool:      "mypool",
 		TeamOwner: "myteam",
 	}
-	err := v.Create()
+	err := v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
-	err = v.Delete()
+	err = v.Delete(context.TODO())
 	c.Assert(err, check.IsNil)
 	_, err = Load(v.Name)
 	c.Assert(err, check.Equals, ErrVolumeNotFound)
@@ -530,7 +531,7 @@ volume-plans:
 		return &volumeProv, nil
 	})
 	defer provision.Unregister("volumeprov")
-	err := pool.AddPool(pool.AddPoolOptions{
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "volumepool",
 		Provisioner: "volumeprov",
 	})
@@ -541,10 +542,10 @@ volume-plans:
 		Pool:      "volumepool",
 		TeamOwner: "myteam",
 	}
-	err = v.Create()
+	err = v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	volumeProv.isProvisioned = true
-	err = v.Create()
+	err = v.Create(context.TODO())
 	c.Assert(err, check.Equals, ErrVolumeAlreadyProvisioned)
 }
 
@@ -560,7 +561,7 @@ volume-plans:
 		return &volumeProv, nil
 	})
 	defer provision.Unregister("volumeprov")
-	err := pool.AddPool(pool.AddPoolOptions{
+	err := pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "volumepool",
 		Provisioner: "volumeprov",
 	})
@@ -571,9 +572,9 @@ volume-plans:
 		Pool:      "volumepool",
 		TeamOwner: "myteam",
 	}
-	err = v.Create()
+	err = v.Create(context.TODO())
 	c.Assert(err, check.IsNil)
-	err = v.Delete()
+	err = v.Delete(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(volumeProv.deleteCallVolume, check.Equals, "v1")
 	c.Assert(volumeProv.deleteCallPool, check.Equals, "volumepool")
@@ -603,7 +604,7 @@ func (s *S) TestListByFilter(c *check.C) {
 		},
 	}
 	for i, v := range volumes {
-		err := v.Create()
+		err := v.Create(context.TODO())
 		c.Assert(err, check.IsNil)
 		volumes[i].Plan.Opts = map[string]interface{}{
 			"driver": "local",
@@ -652,7 +653,7 @@ func (s *S) TestVolumeValidateNew(c *check.C) {
 	}
 	for _, t := range tt {
 		vol.Name = t.name
-		c.Check(errors.Cause(vol.validateNew()), check.DeepEquals, t.expectedErr, check.Commentf(t.name))
+		c.Check(errors.Cause(vol.validateNew(context.TODO())), check.DeepEquals, t.expectedErr, check.Commentf(t.name))
 	}
 }
 
@@ -683,18 +684,18 @@ volume-plans:
 		{Volume{Name: "volume1", Pool: "mypool", TeamOwner: "myteam", Plan: VolumePlan{Name: "invalidplan"}}, config.ErrKeyNotFound{Key: "volume-plans:invalidplan:fake"}},
 	}
 	for _, t := range tt {
-		c.Check(errors.Cause(t.volume.validate()), check.DeepEquals, t.expectedErr, check.Commentf(t.volume.Name))
+		c.Check(errors.Cause(t.volume.validate(context.TODO())), check.DeepEquals, t.expectedErr, check.Commentf(t.volume.Name))
 	}
 }
 
 func (s *S) TestRenameTeam(c *check.C) {
 	v1 := Volume{Name: "v1", Plan: VolumePlan{Name: "p1"}, Pool: "mypool", TeamOwner: "myteam"}
-	err := v1.Create()
+	err := v1.Create(context.TODO())
 	c.Assert(err, check.IsNil)
 	v2 := Volume{Name: "v2", Plan: VolumePlan{Name: "p1"}, Pool: "mypool", TeamOwner: "otherteam"}
-	err = v2.Create()
+	err = v2.Create(context.TODO())
 	c.Assert(err, check.IsNil)
-	err = RenameTeam("myteam", "mynewteam")
+	err = RenameTeam(context.TODO(), "myteam", "mynewteam")
 	c.Assert(err, check.IsNil)
 	vols, err := ListByFilter(nil)
 	c.Assert(err, check.IsNil)

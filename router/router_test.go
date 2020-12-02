@@ -5,57 +5,63 @@
 package router
 
 import (
+	"context"
 	"errors"
 
 	"github.com/tsuru/config"
+	"github.com/tsuru/tsuru/servicemanager"
+	"github.com/tsuru/tsuru/types/router"
 	check "gopkg.in/check.v1"
 )
 
 func (s *S) TestRegisterAndGet(c *check.C) {
 	var r Router
-	var prefixes []string
+	var getters []ConfigGetter
 	var names []string
-	routerCreator := func(name, prefix string) (Router, error) {
+	routerCreator := func(name string, config ConfigGetter) (Router, error) {
 		names = append(names, name)
-		prefixes = append(prefixes, prefix)
+		getters = append(getters, config)
 		return r, nil
 	}
 	Register("router", routerCreator)
 	config.Set("routers:mine:type", "router")
-	defer config.Unset("routers:mine:type")
-	got, err := Get("mine")
+	defer config.Unset("routers:mine")
+	got, err := Get(context.TODO(), "mine")
 	c.Assert(err, check.IsNil)
 	c.Assert(r, check.DeepEquals, got)
 	c.Assert(names, check.DeepEquals, []string{"mine"})
-	c.Assert(prefixes, check.DeepEquals, []string{"routers:mine"})
-	_, err = Get("unknown-router")
+	c.Assert(getters, check.HasLen, 1)
+	getterType, err := getters[0].GetString("type")
+	c.Assert(err, check.IsNil)
+	c.Assert(getterType, check.Equals, "router")
+	_, err = Get(context.TODO(), "unknown-router")
 	c.Assert(err, check.DeepEquals, &ErrRouterNotFound{Name: "unknown-router"})
 	config.Set("routers:mine-unknown:type", "unknown")
-	defer config.Unset("routers:mine-unknown:type")
-	_, err = Get("mine-unknown")
+	defer config.Unset("routers:mine-unknown")
+	_, err = Get(context.TODO(), "mine-unknown")
 	c.Assert(err, check.Not(check.IsNil))
 	c.Assert(`unknown router: "unknown".`, check.Equals, err.Error())
 }
 
 func (s *S) TestRegisterAndType(c *check.C) {
 	config.Set("routers:mine:type", "myrouter")
-	defer config.Unset("routers:mine:type")
-	rType, prefix, err := Type("mine")
+	defer config.Unset("routers:mine")
+	rType, prefix, err := configType("mine")
 	c.Assert(err, check.IsNil)
 	c.Assert(rType, check.Equals, "myrouter")
 	c.Assert(prefix, check.Equals, "routers:mine")
-	_, err = Get("unknown-router")
+	_, err = Get(context.TODO(), "unknown-router")
 	c.Assert(err, check.DeepEquals, &ErrRouterNotFound{Name: "unknown-router"})
 }
 
 func (s *S) TestRegisterAndTypeSpecialCase(c *check.C) {
-	rType, prefix, err := Type("hipache")
+	rType, prefix, err := configType("hipache")
 	c.Assert(err, check.IsNil)
 	c.Assert(rType, check.Equals, "hipache")
 	c.Assert(prefix, check.Equals, "hipache")
 	config.Set("routers:hipache:type", "htype")
 	defer config.Unset("routers:hipache:type")
-	rType, prefix, err = Type("hipache")
+	rType, prefix, err = configType("hipache")
 	c.Assert(err, check.IsNil)
 	c.Assert(rType, check.Equals, "htype")
 	c.Assert(prefix, check.Equals, "routers:hipache")
@@ -63,10 +69,10 @@ func (s *S) TestRegisterAndTypeSpecialCase(c *check.C) {
 
 func (s *S) TestRegisterAndGetCustomNamedRouter(c *check.C) {
 	var names []string
-	var prefixes []string
-	routerCreator := func(name, prefix string) (Router, error) {
+	var getters []ConfigGetter
+	routerCreator := func(name string, config ConfigGetter) (Router, error) {
 		names = append(names, name)
-		prefixes = append(prefixes, prefix)
+		getters = append(getters, config)
 		var r Router
 		return r, nil
 	}
@@ -75,12 +81,56 @@ func (s *S) TestRegisterAndGetCustomNamedRouter(c *check.C) {
 	config.Set("routers:inst2:type", "myrouter")
 	defer config.Unset("routers:inst1:type")
 	defer config.Unset("routers:inst2:type")
-	_, err := Get("inst1")
+	_, err := Get(context.TODO(), "inst1")
 	c.Assert(err, check.IsNil)
-	_, err = Get("inst2")
+	_, err = Get(context.TODO(), "inst2")
 	c.Assert(err, check.IsNil)
 	c.Assert(names, check.DeepEquals, []string{"inst1", "inst2"})
-	c.Assert(prefixes, check.DeepEquals, []string{"routers:inst1", "routers:inst2"})
+	c.Assert(getters, check.HasLen, 2)
+	getterType, err := getters[0].GetString("type")
+	c.Assert(err, check.IsNil)
+	c.Assert(getterType, check.Equals, "myrouter")
+	getterType, err = getters[1].GetString("type")
+	c.Assert(err, check.IsNil)
+	c.Assert(getterType, check.Equals, "myrouter")
+}
+
+func (s *S) TestGetDynamicRouter(c *check.C) {
+	var names []string
+	var getters []ConfigGetter
+	routerCreator := func(name string, config ConfigGetter) (Router, error) {
+		names = append(names, name)
+		getters = append(getters, config)
+		var r Router
+		return r, nil
+	}
+	Register("myrouter", routerCreator)
+	config.Set("routers:inst1:type", "myrouter")
+	config.Set("routers:inst1:cfg1", "v1")
+	defer config.Unset("routers:inst1")
+
+	err := servicemanager.DynamicRouter.Create(context.TODO(), router.DynamicRouter{
+		Name: "inst2",
+		Type: "myrouter",
+		Config: map[string]interface{}{
+			"cfg1": "v2",
+		},
+	})
+	c.Assert(err, check.IsNil)
+
+	_, err = Get(context.TODO(), "inst1")
+	c.Assert(err, check.IsNil)
+	_, err = Get(context.TODO(), "inst2")
+	c.Assert(err, check.IsNil)
+
+	c.Assert(names, check.DeepEquals, []string{"inst1", "inst2"})
+	c.Assert(getters, check.HasLen, 2)
+	getterType, err := getters[0].GetString("cfg1")
+	c.Assert(err, check.IsNil)
+	c.Assert(getterType, check.Equals, "v1")
+	getterType, err = getters[1].GetString("cfg1")
+	c.Assert(err, check.IsNil)
+	c.Assert(getterType, check.Equals, "v2")
 }
 
 func (s *S) TestDefault(c *check.C) {
@@ -88,13 +138,13 @@ func (s *S) TestDefault(c *check.C) {
 	config.Set("routers:fake:type", "fake")
 	config.Set("routers:fake2:type", "fake")
 	config.Set("routers:fake2:default", true)
-	d, err := Default()
+	d, err := Default(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(d, check.Equals, "fake2")
 }
 
 func (s *S) TestDefaultNoRouter(c *check.C) {
-	d, err := Default()
+	d, err := Default(context.TODO())
 	c.Assert(err, check.NotNil)
 	c.Assert(d, check.Equals, "")
 }
@@ -103,7 +153,7 @@ func (s *S) TestDefaultNoRouterMultipleRouters(c *check.C) {
 	defer config.Unset("routers")
 	config.Set("routers:fake:type", "fake")
 	config.Set("routers:fake2:type", "fake")
-	d, err := Default()
+	d, err := Default(context.TODO())
 	c.Assert(err, check.NotNil)
 	c.Assert(d, check.Equals, "")
 }
@@ -111,7 +161,7 @@ func (s *S) TestDefaultNoRouterMultipleRouters(c *check.C) {
 func (s *S) TestDefaultSingleRouter(c *check.C) {
 	defer config.Unset("routers")
 	config.Set("routers:fake:type", "fake")
-	d, err := Default()
+	d, err := Default(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(d, check.Equals, "fake")
 }
@@ -122,7 +172,7 @@ func (s *S) TestDefaultFromFallbackConfig(c *check.C) {
 	config.Set("routers:fake:type", "fake")
 	config.Set("routers:fake2:type", "fake")
 	config.Set("docker:router", "fake2")
-	d, err := Default()
+	d, err := Default(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(d, check.Equals, "fake2")
 }
@@ -207,7 +257,7 @@ func (s *S) TestList(c *check.C) {
 		{Name: "router1", Type: "foo", Default: false},
 		{Name: "router2", Type: "bar", Default: true},
 	}
-	routers, err := List()
+	routers, err := List(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }
@@ -224,7 +274,7 @@ func (s *S) TestListIncludesLegacyHipacheRouter(c *check.C) {
 		{Name: "router1", Type: "foo"},
 		{Name: "router2", Type: "bar"},
 	}
-	routers, err := List()
+	routers, err := List(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }
@@ -235,7 +285,7 @@ func (s *S) TestListIncludesOnlyLegacyHipacheRouter(c *check.C) {
 	expected := []PlanRouter{
 		{Name: "hipache", Type: "hipache"},
 	}
-	routers, err := List()
+	routers, err := List(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }
@@ -251,20 +301,54 @@ func (s *S) TestListDefaultDockerRouter(c *check.C) {
 		{Name: "router1", Type: "foo", Default: false},
 		{Name: "router2", Type: "bar", Default: true},
 	}
-	routers, err := List()
+	routers, err := List(context.TODO())
+	c.Assert(err, check.IsNil)
+	c.Assert(routers, check.DeepEquals, expected)
+}
+
+func (s *S) TestListIncludesDynamic(c *check.C) {
+	config.Set("routers:router1:type", "foo")
+	config.Set("routers:router2:type", "bar")
+	config.Set("routers:router2:cfg1", "aaa")
+	defer config.Unset("routers:router1")
+	defer config.Unset("routers:router2")
+
+	Register("myrouter", func(name string, config ConfigGetter) (Router, error) {
+		return nil, nil
+	})
+
+	err := servicemanager.DynamicRouter.Create(context.TODO(), router.DynamicRouter{
+		Name: "router-dyn",
+		Type: "myrouter",
+		Config: map[string]interface{}{
+			"mycfg": "zzz",
+		},
+	})
+	c.Assert(err, check.IsNil)
+
+	expected := []PlanRouter{
+		{Name: "router-dyn", Type: "myrouter", Dynamic: true, Config: map[string]interface{}{"mycfg": "zzz"}},
+		{Name: "router1", Type: "foo"},
+		{Name: "router2", Type: "bar", Config: map[string]interface{}{"cfg1": "aaa"}},
+	}
+	routers, err := List(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }
 
 type testInfoRouter struct{ Router }
 
-func (r *testInfoRouter) GetInfo() (map[string]string, error) {
+var _ InfoRouter = &testInfoRouter{}
+
+func (r *testInfoRouter) GetInfo(ctx context.Context) (map[string]string, error) {
 	return map[string]string{"her": "amaat"}, nil
 }
 
 type testInfoErrRouter struct{ Router }
 
-func (r *testInfoErrRouter) GetInfo() (map[string]string, error) {
+var _ InfoRouter = &testInfoErrRouter{}
+
+func (r *testInfoErrRouter) GetInfo(ctx context.Context) (map[string]string, error) {
 	return nil, errors.New("error getting router info")
 }
 
@@ -274,7 +358,7 @@ func (s *S) TestListWithInfo(c *check.C) {
 	config.Set("routers:router2:default", true)
 	defer config.Unset("routers:router1")
 	defer config.Unset("routers:router2")
-	fooCreator := func(name, prefix string) (Router, error) {
+	fooCreator := func(name string, config ConfigGetter) (Router, error) {
 		return &testInfoRouter{}, nil
 	}
 	Register("foo", fooCreator)
@@ -283,7 +367,7 @@ func (s *S) TestListWithInfo(c *check.C) {
 		{Name: "router1", Type: "foo", Info: map[string]string{"her": "amaat"}, Default: false},
 		{Name: "router2", Type: "bar", Info: map[string]string{"her": "amaat"}, Default: true},
 	}
-	routers, err := ListWithInfo()
+	routers, err := ListWithInfo(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }
@@ -292,21 +376,28 @@ func (s *S) TestListWithInfoError(c *check.C) {
 	config.Set("routers:router1:type", "foo")
 	config.Set("routers:router2:type", "bar")
 	config.Set("routers:router2:default", true)
+	config.Set("routers:router3:type", "baz")
 	defer config.Unset("routers:router1")
 	defer config.Unset("routers:router2")
-	fooCreator := func(name, prefix string) (Router, error) {
+	defer config.Unset("routers:router3")
+	fooCreator := func(name string, config ConfigGetter) (Router, error) {
 		return &testInfoRouter{}, nil
 	}
-	barCreator := func(name, prefix string) (Router, error) {
+	barCreator := func(name string, config ConfigGetter) (Router, error) {
 		return &testInfoErrRouter{}, nil
+	}
+	bazCreator := func(name string, config ConfigGetter) (Router, error) {
+		return nil, errors.New("create error")
 	}
 	Register("foo", fooCreator)
 	Register("bar", barCreator)
+	Register("baz", bazCreator)
 	expected := []PlanRouter{
 		{Name: "router1", Type: "foo", Info: map[string]string{"her": "amaat"}, Default: false},
 		{Name: "router2", Type: "bar", Info: map[string]string{"error": "error getting router info"}, Default: true},
+		{Name: "router3", Type: "baz", Info: map[string]string{"error": "create error"}, Default: false},
 	}
-	routers, err := ListWithInfo()
+	routers, err := ListWithInfo(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(routers, check.DeepEquals, expected)
 }

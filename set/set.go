@@ -51,14 +51,26 @@ func (s Set) Difference(other Set) Set {
 }
 
 func (s Set) Sorted() []string {
+	result := s.ToList()
+	sort.Strings(result)
+	return result
+}
+
+func (s Set) ToList() []string {
 	result := make([]string, len(s))
 	i := 0
 	for key := range s {
 		result[i] = key
 		i++
 	}
-	sort.Strings(result)
 	return result
+}
+
+func (s Set) Equal(other Set) bool {
+	if len(s) != len(other) {
+		return false
+	}
+	return len(s.Intersection(other)) == len(s)
 }
 
 func FromValues(l ...string) Set {

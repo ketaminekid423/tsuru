@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,7 +92,7 @@ func moveContainerHandler(w http.ResponseWriter, r *http.Request, t auth.Token) 
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	_, err = mainDockerProvisioner.moveContainer(contId, to, evt)
+	_, err = mainDockerProvisioner.moveContainer(context.TODO(), contId, to, evt)
 	if err != nil {
 		return errors.Wrap(err, "Error trying to move container")
 	}
@@ -110,6 +111,7 @@ func moveContainerHandler(w http.ResponseWriter, r *http.Request, t auth.Token) 
 //   401: Unauthorized
 //   404: Not found
 func moveContainersHandler(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	params := map[string]string{}
 	err = api.ParseInput(r, &params)
 	if err != nil {
@@ -143,7 +145,7 @@ func moveContainersHandler(w http.ResponseWriter, r *http.Request, t auth.Token)
 	defer keepAliveWriter.Stop()
 	writer := &tsuruIo.SimpleJsonMessageEncoderWriter{Encoder: json.NewEncoder(keepAliveWriter)}
 	evt.SetLogWriter(writer)
-	err = mainDockerProvisioner.MoveContainers(from, to, evt)
+	err = mainDockerProvisioner.MoveContainers(ctx, from, to, evt)
 	if err != nil {
 		return errors.Wrap(err, "Error trying to move containers")
 	}
@@ -270,7 +272,8 @@ func logsConfigSetHandler(w http.ResponseWriter, r *http.Request, t auth.Token) 
 }
 
 func tryRestartAppsByFilter(filter *app.Filter, writer io.Writer) error {
-	apps, err := app.List(filter)
+	ctx := context.TODO()
+	apps, err := app.List(ctx, filter)
 	if err != nil {
 		return err
 	}
@@ -289,7 +292,7 @@ func tryRestartAppsByFilter(filter *app.Filter, writer io.Writer) error {
 		go func(i int) {
 			defer wg.Done()
 			a := apps[i]
-			err := a.Restart("", "", writer)
+			err := a.Restart(ctx, "", "", writer)
 			if err != nil {
 				fmt.Fprintf(writer, "Error: unable to restart %s: %s\n", a.Name, err.Error())
 			} else {

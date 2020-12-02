@@ -12,6 +12,7 @@ import (
 	"github.com/tsuru/tsuru/types/cache"
 	"github.com/tsuru/tsuru/types/provision"
 	"github.com/tsuru/tsuru/types/quota"
+	"github.com/tsuru/tsuru/types/router"
 	"github.com/tsuru/tsuru/types/service"
 	"github.com/tsuru/tsuru/types/tracker"
 )
@@ -29,6 +30,9 @@ type MockService struct {
 	ServiceBroker             *service.MockServiceBrokerService
 	ServiceBrokerCatalogCache *service.MockServiceBrokerCatalogCacheService
 	InstanceTracker           tracker.InstanceService
+	DynamicRouter             *router.MockDynamicRouterService
+	AuthGroup                 auth.GroupService
+	Pool                      *provision.MockPoolService
 }
 
 // SetMockService return a new MockService and set as a servicemanager
@@ -44,6 +48,9 @@ func SetMockService(m *MockService) {
 	m.ServiceBroker = &service.MockServiceBrokerService{}
 	m.ServiceBrokerCatalogCache = &service.MockServiceBrokerCatalogCacheService{}
 	m.InstanceTracker = &tracker.MockInstanceService{}
+	m.DynamicRouter = &router.MockDynamicRouterService{}
+	m.AuthGroup = &auth.MockGroupService{}
+	m.Pool = &provision.MockPoolService{}
 	servicemanager.AppCache = m.Cache
 	servicemanager.Plan = m.Plan
 	servicemanager.Platform = m.Platform
@@ -55,6 +62,9 @@ func SetMockService(m *MockService) {
 	servicemanager.ServiceBroker = m.ServiceBroker
 	servicemanager.ServiceBrokerCatalogCache = m.ServiceBrokerCatalogCache
 	servicemanager.InstanceTracker = m.InstanceTracker
+	servicemanager.DynamicRouter = m.DynamicRouter
+	servicemanager.AuthGroup = m.AuthGroup
+	servicemanager.Pool = m.Pool
 }
 
 func (m *MockService) ResetCache() {
@@ -100,14 +110,12 @@ func (m *MockService) ResetUserQuota() {
 	m.UserQuota.OnInc = nil
 	m.UserQuota.OnSet = nil
 	m.UserQuota.OnSetLimit = nil
-	m.UserQuota.OnGet = nil
 }
 
 func (m *MockService) ResetAppQuota() {
 	m.AppQuota.OnInc = nil
 	m.AppQuota.OnSet = nil
 	m.AppQuota.OnSetLimit = nil
-	m.AppQuota.OnGet = nil
 }
 
 func (m *MockService) ResetCluster() {
@@ -131,4 +139,9 @@ func (m *MockService) ResetServiceBroker() {
 func (m *MockService) ResetServiceBrokerCatalogCache() {
 	m.ServiceBrokerCatalogCache.OnSave = nil
 	m.ServiceBrokerCatalogCache.OnLoad = nil
+}
+
+func (m *MockService) ResetPool() {
+	m.Pool.OnFindByName = nil
+	m.Pool.OnList = nil
 }

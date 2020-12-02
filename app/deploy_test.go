@@ -6,6 +6,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -54,7 +55,7 @@ func insertDeploysAsEvents(data []DeployData, c *check.C) []*event.Event {
 
 func (s *S) TestListAppDeploysMarshalJSON(c *check.C) {
 	a := App{Name: "g1", TeamOwner: s.team.Name}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	insert := []DeployData{
 		{App: "g1", Timestamp: time.Now().Add(-3600 * time.Second), Log: "logs", Diff: "diff", Origin: "app-deploy"},
@@ -62,7 +63,7 @@ func (s *S) TestListAppDeploysMarshalJSON(c *check.C) {
 		{App: "g1", Timestamp: time.Now(), Log: "logs", Diff: "diff", Commit: "abcdef1234567890", Message: "my awesome commit..."},
 	}
 	insertDeploysAsEvents(insert, c)
-	deploys, err := ListDeploys(nil, 0, 0)
+	deploys, err := ListDeploys(context.TODO(), nil, 0, 0)
 	c.Assert(err, check.IsNil)
 	c.Assert(deploys, check.HasLen, 3)
 	data, err := json.Marshal(&deploys)
@@ -87,14 +88,14 @@ func (s *S) TestListAppDeploysMarshalJSON(c *check.C) {
 
 func (s *S) TestListAppDeploys(c *check.C) {
 	a := App{Name: "g1", TeamOwner: s.team.Name}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	insert := []DeployData{
 		{App: "g1", Timestamp: time.Now().Add(-3600 * time.Second), Log: "logs", Diff: "diff"},
 		{App: "g1", Timestamp: time.Now(), Log: "logs", Diff: "diff"},
 	}
 	insertDeploysAsEvents(insert, c)
-	deploys, err := ListDeploys(nil, 0, 0)
+	deploys, err := ListDeploys(context.TODO(), nil, 0, 0)
 	c.Assert(err, check.IsNil)
 	c.Assert(deploys, check.HasLen, 2)
 	expected := []DeployData{insert[1], insert[0]}
@@ -113,7 +114,7 @@ func (s *S) TestListAppDeploys(c *check.C) {
 
 func (s *S) TestListAppDeploysWithImage(c *check.C) {
 	a := App{Name: "g1", TeamOwner: s.team.Name}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	insert := []DeployData{
 		{App: "g1", Timestamp: time.Now().Add(-3600 * time.Second), Image: "registry.somewhere/tsuru/app-example:v2"},
@@ -125,7 +126,7 @@ func (s *S) TestListAppDeploysWithImage(c *check.C) {
 	}
 	insertDeploysAsEvents(insert, c)
 	expected := []DeployData{expectedDeploy[1], expectedDeploy[0]}
-	deploys, err := ListDeploys(nil, 0, 0)
+	deploys, err := ListDeploys(context.TODO(), nil, 0, 0)
 	c.Assert(err, check.IsNil)
 	c.Assert(deploys, check.HasLen, 2)
 	normalizeTS(deploys)
@@ -137,7 +138,7 @@ func (s *S) TestListAppDeploysWithImage(c *check.C) {
 }
 
 func newSuccessfulAppVersion(c *check.C, app provision.App) appTypes.AppVersion {
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: app,
 	})
 	c.Assert(err, check.IsNil)
@@ -150,13 +151,27 @@ func newSuccessfulAppVersion(c *check.C, app provision.App) appTypes.AppVersion 
 	return version
 }
 
+func newUnsuccessfulAppVersion(c *check.C, app provision.App) appTypes.AppVersion {
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
+		App: app,
+	})
+	c.Assert(err, check.IsNil)
+	err = version.CommitBuildImage()
+	c.Assert(err, check.IsNil)
+	err = version.CommitBaseImage()
+	c.Assert(err, check.IsNil)
+	err = version.MarkToRemoval()
+	c.Assert(err, check.IsNil)
+	return version
+}
+
 func (s *S) TestListFilteredDeploys(c *check.C) {
 	a := App{
 		Name:      "g1",
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	team := authTypes.Team{Name: "team"}
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -170,7 +185,7 @@ func (s *S) TestListFilteredDeploys(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: team.Name,
 	}
-	err = CreateApp(&a, s.user)
+	err = CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newSuccessfulAppVersion(c, &a)
 	insert := []DeployData{
@@ -184,13 +199,13 @@ func (s *S) TestListFilteredDeploys(c *check.C) {
 	normalizeTS(expected)
 	f := &Filter{}
 	f.ExtraIn("teams", team.Name)
-	deploys, err := ListDeploys(f, 0, 0)
+	deploys, err := ListDeploys(context.TODO(), f, 0, 0)
 	c.Assert(err, check.IsNil)
 	normalizeTS(deploys)
 	c.Assert(deploys, check.DeepEquals, []DeployData{expected[0]})
 	f = &Filter{}
 	f.ExtraIn("name", "g1")
-	deploys, err = ListDeploys(f, 0, 0)
+	deploys, err = ListDeploys(context.TODO(), f, 0, 0)
 	c.Assert(err, check.IsNil)
 	normalizeTS(deploys)
 	c.Assert(deploys, check.DeepEquals, []DeployData{expected[1]})
@@ -207,7 +222,7 @@ func normalizeTS(deploys []DeployData) {
 func (s *S) TestListAllDeploysSkipAndLimit(c *check.C) {
 	user := &auth.User{Email: "user@user.com", Password: "123456"}
 	AuthScheme = nativeScheme
-	_, err := nativeScheme.Create(user)
+	_, err := nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
 	team := &authTypes.Team{Name: "team"}
 	c.Assert(err, check.IsNil)
@@ -217,7 +232,7 @@ func (s *S) TestListAllDeploysSkipAndLimit(c *check.C) {
 		Teams:     []string{team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err = CreateApp(&a, s.user)
+	err = CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	insert := []DeployData{
 		{App: "app1", Commit: "v1", Timestamp: time.Now().Add(-30 * time.Second)},
@@ -229,7 +244,7 @@ func (s *S) TestListAllDeploysSkipAndLimit(c *check.C) {
 	expected := []DeployData{insert[2], insert[1]}
 	expected[0].Origin = "git"
 	expected[1].Origin = "git"
-	deploys, err := ListDeploys(nil, 1, 2)
+	deploys, err := ListDeploys(context.TODO(), nil, 1, 2)
 	c.Assert(err, check.IsNil)
 	c.Assert(deploys, check.HasLen, 2)
 	normalizeTS(deploys)
@@ -243,7 +258,7 @@ func (s *S) TestGetDeploy(c *check.C) {
 		Platform:  "zend",
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newDeploy := DeployData{App: "g1", Timestamp: time.Now()}
 	evts := insertDeploysAsEvents([]DeployData{newDeploy}, c)
@@ -278,7 +293,7 @@ func (s *S) TestBuildApp(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.New(&event.Opts{
 		Target:   event.Target{Type: "app", Value: a.Name},
@@ -288,7 +303,7 @@ func (s *S) TestBuildApp(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
-	imgID, err := Build(DeployOptions{
+	imgID, err := Build(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: ioutil.Discard,
 		File:         ioutil.NopCloser(buf),
@@ -307,7 +322,7 @@ func (s *S) TestDeployAppUpload(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
 	writer := &bytes.Buffer{}
@@ -318,7 +333,7 @@ func (s *S) TestDeployAppUpload(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		File:         ioutil.NopCloser(buf),
 		FileSize:     int64(buf.Len()),
@@ -341,7 +356,7 @@ func (s *S) TestDeployAppImage(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -351,7 +366,7 @@ func (s *S) TestDeployAppImage(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -375,7 +390,7 @@ func (s *S) TestDeployAppWithUpdatedPlatform(c *check.C) {
 		TeamOwner:      s.team.Name,
 		Router:         "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
 	writer := &bytes.Buffer{}
@@ -386,7 +401,7 @@ func (s *S) TestDeployAppWithUpdatedPlatform(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		File:         ioutil.NopCloser(buf),
 		FileSize:     int64(buf.Len()),
@@ -410,7 +425,7 @@ func (s *S) TestDeployAppImageWithUpdatedPlatform(c *check.C) {
 		TeamOwner:      s.team.Name,
 		Router:         "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -420,7 +435,7 @@ func (s *S) TestDeployAppImageWithUpdatedPlatform(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -443,7 +458,7 @@ func (s *S) TestDeployAppWithoutImageOrPlatform(c *check.C) {
 		TeamOwner:      s.team.Name,
 		Router:         "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.New(&event.Opts{
 		Target:   event.Target{Type: "app", Value: a.Name},
@@ -452,7 +467,7 @@ func (s *S) TestDeployAppWithoutImageOrPlatform(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
 		Event:        evt,
@@ -469,7 +484,7 @@ func (s *S) TestDeployAppIncrementDeployNumber(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -479,7 +494,7 @@ func (s *S) TestDeployAppIncrementDeployNumber(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -500,7 +515,7 @@ func (s *S) TestDeployAppSaveDeployData(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	commit := "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c"
@@ -511,7 +526,7 @@ func (s *S) TestDeployAppSaveDeployData(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       commit,
@@ -533,7 +548,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginRollback(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -543,7 +558,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginRollback(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		Image:        "some-image",
@@ -564,7 +579,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginAppDeploy(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -575,7 +590,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginAppDeploy(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		File:         ioutil.NopCloser(buf),
@@ -597,7 +612,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginDragAndDrop(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -608,7 +623,7 @@ func (s *S) TestDeployAppSaveDeployDataOriginDragAndDrop(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		File:         ioutil.NopCloser(buf),
@@ -630,7 +645,7 @@ func (s *S) TestDeployAppSaveDeployErrorData(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -640,7 +655,7 @@ func (s *S) TestDeployAppSaveDeployErrorData(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -658,7 +673,7 @@ func (s *S) TestDeployAppShowLogLinesOnStartupError(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	err = servicemanager.AppLog.Add(a.Name, "msg1", "src1", "unit1")
 	c.Assert(err, check.IsNil)
@@ -670,7 +685,7 @@ func (s *S) TestDeployAppShowLogLinesOnStartupError(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -678,6 +693,46 @@ func (s *S) TestDeployAppShowLogLinesOnStartupError(c *check.C) {
 		Event:        evt,
 	})
 	c.Assert(err, check.ErrorMatches, `(?s).*---- ERROR during deploy: ----.*deploy error.*---- Last 1 log messages: ----.*\[src1\]\[unit1\]: msg1.*`)
+}
+
+func (s *S) TestDeployAppShowLogEmbeddedLinesOnStartupError(c *check.C) {
+	s.provisioner.PrepareFailure("Deploy", provision.ErrUnitStartup{
+		Err: errors.New("deploy error"),
+		CrashedUnitsLogs: []appTypes.Applog{
+			{
+				AppName: "myapp",
+				Source:  "web",
+				Unit:    "myapp-web-001",
+				Message: "embedded log message",
+			},
+		},
+	})
+	a := App{
+		Name:      "testerrorapp",
+		Platform:  "zend",
+		Teams:     []string{s.team.Name},
+		TeamOwner: s.team.Name,
+	}
+	err := CreateApp(context.TODO(), &a, s.user)
+	c.Assert(err, check.IsNil)
+	err = servicemanager.AppLog.Add(a.Name, "msg1", "src1", "unit1")
+	c.Assert(err, check.IsNil)
+	writer := &bytes.Buffer{}
+	evt, err := event.New(&event.Opts{
+		Target:   event.Target{Type: "app", Value: a.Name},
+		Kind:     permission.PermAppDeploy,
+		RawOwner: event.Owner{Type: event.OwnerTypeUser, Name: s.user.Email},
+		Allowed:  event.Allowed(permission.PermApp),
+	})
+	c.Assert(err, check.IsNil)
+	_, err = Deploy(context.TODO(), DeployOptions{
+		App:          &a,
+		Image:        "myimage",
+		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
+		OutputStream: writer,
+		Event:        evt,
+	})
+	c.Assert(err, check.ErrorMatches, `(?s).*---- ERROR during deploy: ----.*deploy error.*---- Last 1 log messages: ----.*\[web\]\[myapp-web-001\]: embedded log message.*`)
 }
 
 func (s *S) TestValidateOrigin(c *check.C) {
@@ -697,11 +752,11 @@ func (s *S) TestDeployAsleepApp(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	s.provisioner.AddUnits(&a, 1, "web", newSuccessfulAppVersion(c, &a), nil)
+	s.provisioner.AddUnits(context.TODO(), &a, 1, "web", newSuccessfulAppVersion(c, &a), nil)
 	writer := &bytes.Buffer{}
-	err = a.Sleep(writer, "web", "", &url.URL{Scheme: "http", Host: "proxy:1234"})
+	err = a.Sleep(context.TODO(), writer, "web", "", &url.URL{Scheme: "http", Host: "proxy:1234"})
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
@@ -715,7 +770,7 @@ func (s *S) TestDeployAsleepApp(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = Deploy(DeployOptions{
+	_, err = Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		Image:        "myimage",
 		Commit:       "1ee1f1084927b3a5db59c9033bc5c4abefb7b93c",
@@ -732,7 +787,7 @@ func (s *S) TestIncrementDeploy(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	incrementDeploy(&a)
 	c.Assert(a.Deploys, check.Equals, uint(1))
@@ -747,7 +802,7 @@ func (s *S) TestDeployToProvisioner(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.New(&event.Opts{
 		Target:   event.Target{Type: "app", Value: a.Name},
@@ -757,7 +812,7 @@ func (s *S) TestDeployToProvisioner(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	opts := DeployOptions{App: &a, Image: "myimage"}
-	_, err = deployToProvisioner(&opts, evt)
+	_, err = deployToProvisioner(context.TODO(), &opts, evt)
 	c.Assert(err, check.IsNil)
 	err = evt.Done(nil)
 	c.Assert(err, check.IsNil)
@@ -771,7 +826,7 @@ func (s *S) TestDeployToProvisionerArchive(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	opts := DeployOptions{App: &a, ArchiveURL: "https://s3.amazonaws.com/smt/archive.tar.gz"}
 	evt, err := event.New(&event.Opts{
@@ -781,7 +836,7 @@ func (s *S) TestDeployToProvisionerArchive(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = deployToProvisioner(&opts, evt)
+	_, err = deployToProvisioner(context.TODO(), &opts, evt)
 	c.Assert(err, check.IsNil)
 	err = evt.Done(nil)
 	c.Assert(err, check.IsNil)
@@ -795,7 +850,7 @@ func (s *S) TestDeployToProvisionerUpload(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	buf := strings.NewReader("my file")
 	opts := DeployOptions{App: &a, File: ioutil.NopCloser(buf), FileSize: int64(buf.Len())}
@@ -806,7 +861,7 @@ func (s *S) TestDeployToProvisionerUpload(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = deployToProvisioner(&opts, evt)
+	_, err = deployToProvisioner(context.TODO(), &opts, evt)
 	c.Assert(err, check.IsNil)
 	err = evt.Done(nil)
 	c.Assert(err, check.IsNil)
@@ -820,7 +875,7 @@ func (s *S) TestDeployToProvisionerImage(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	opts := DeployOptions{App: &a, Image: "my-image-x"}
 	evt, err := event.New(&event.Opts{
@@ -830,7 +885,7 @@ func (s *S) TestDeployToProvisionerImage(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	_, err = deployToProvisioner(&opts, evt)
+	_, err = deployToProvisioner(context.TODO(), &opts, evt)
 	c.Assert(err, check.IsNil)
 	err = evt.Done(nil)
 	c.Assert(err, check.IsNil)
@@ -846,7 +901,7 @@ func (s *S) TestRollbackWithNameImage(c *check.C) {
 		Router:    "fake",
 	}
 	version := newSuccessfulAppVersion(c, &a)
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -856,7 +911,7 @@ func (s *S) TestRollbackWithNameImage(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	imgID, err := Deploy(DeployOptions{
+	imgID, err := Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		Image:        version.BaseImageName(),
@@ -879,7 +934,7 @@ func (s *S) TestRollbackWithVersionImage(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newSuccessfulAppVersion(c, &a)
 	writer := &bytes.Buffer{}
@@ -890,7 +945,7 @@ func (s *S) TestRollbackWithVersionImage(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	imgID, err := Deploy(DeployOptions{
+	imgID, err := Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		Image:        fmt.Sprintf("v%d", version.Version()),
@@ -913,7 +968,7 @@ func (s *S) TestRollbackWithWrongVersionImage(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	newSuccessfulAppVersion(c, &a)
 	writer := &bytes.Buffer{}
@@ -924,7 +979,7 @@ func (s *S) TestRollbackWithWrongVersionImage(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	imgID, err := Deploy(DeployOptions{
+	imgID, err := Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		Image:        "v20",
@@ -937,6 +992,37 @@ func (s *S) TestRollbackWithWrongVersionImage(c *check.C) {
 	c.Assert(ok, check.Equals, true)
 	c.Assert(e.Version, check.Equals, "v20")
 	c.Assert(imgID, check.Equals, "")
+}
+
+func (s *S) TestRollbackWithVersionMarkedToRemoved(c *check.C) {
+	a := App{
+		Name:      "otherapp",
+		Platform:  "zend",
+		Teams:     []string{s.team.Name},
+		TeamOwner: s.team.Name,
+		Router:    "fake",
+	}
+	err := CreateApp(context.TODO(), &a, s.user)
+	c.Assert(err, check.IsNil)
+	newUnsuccessfulAppVersion(c, &a)
+	writer := &bytes.Buffer{}
+	evt, err := event.New(&event.Opts{
+		Target:   event.Target{Type: "app", Value: a.Name},
+		Kind:     permission.PermAppDeploy,
+		RawOwner: event.Owner{Type: event.OwnerTypeUser, Name: s.user.Email},
+		Allowed:  event.Allowed(permission.PermApp),
+	})
+	c.Assert(err, check.IsNil)
+	_, err = Deploy(context.TODO(), DeployOptions{
+		App:          &a,
+		OutputStream: writer,
+		Image:        "v1",
+		Rollback:     true,
+		Event:        evt,
+	})
+	c.Assert(err, check.NotNil)
+	err = errors.Cause(err)
+	c.Assert(err, check.Equals, appTypes.ErrVersionMarkedToRemoval)
 }
 
 func (s *S) TestDeployKind(c *check.C) {
@@ -977,7 +1063,7 @@ func (s *S) TestDeployKind(c *check.C) {
 
 func (s *S) TestMigrateDeploysToEvents(c *check.C) {
 	a := App{Name: "g1", TeamOwner: s.team.Name}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	now := time.Unix(time.Now().Unix(), 0)
 	insert := []DeployData{
@@ -1014,7 +1100,7 @@ func (s *S) TestMigrateDeploysToEvents(c *check.C) {
 	}
 	err = MigrateDeploysToEvents()
 	c.Assert(err, check.IsNil)
-	deploys, err := ListDeploys(nil, 0, 0)
+	deploys, err := ListDeploys(context.TODO(), nil, 0, 0)
 	c.Assert(err, check.IsNil)
 	c.Assert(deploys, check.HasLen, 2)
 	for i := range deploys {
@@ -1036,7 +1122,7 @@ func (s *S) TestRebuild(c *check.C) {
 		Teams:     []string{s.team.Name},
 		TeamOwner: s.team.Name,
 	}
-	err := CreateApp(&a, s.user)
+	err := CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	writer := &bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -1046,7 +1132,7 @@ func (s *S) TestRebuild(c *check.C) {
 		Allowed:  event.Allowed(permission.PermApp),
 	})
 	c.Assert(err, check.IsNil)
-	imgID, err := Deploy(DeployOptions{
+	imgID, err := Deploy(context.TODO(), DeployOptions{
 		App:          &a,
 		OutputStream: writer,
 		Kind:         DeployRebuild,
@@ -1065,27 +1151,27 @@ func (s *S) TestRollbackUpdate(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := CreateApp(&app, s.user)
+	err := CreateApp(context.TODO(), &app, s.user)
 	c.Assert(err, check.IsNil)
 	version := newSuccessfulAppVersion(c, &app)
 
-	err = RollbackUpdate(&app, fmt.Sprintf("v%d", version.Version()), "my reason", true)
+	err = RollbackUpdate(context.TODO(), &app, fmt.Sprintf("v%d", version.Version()), "my reason", true)
 	c.Assert(err, check.IsNil)
 
-	versions, err := servicemanager.AppVersion.AppVersions(&app)
+	versions, err := servicemanager.AppVersion.AppVersions(context.TODO(), &app)
 	c.Assert(err, check.IsNil)
 	c.Assert(versions.Versions[version.Version()].Disabled, check.Equals, true)
 	c.Assert(versions.Versions[version.Version()].DisabledReason, check.Equals, "my reason")
 
-	err = RollbackUpdate(&app, fmt.Sprintf("v%d", version.Version()), "", false)
+	err = RollbackUpdate(context.TODO(), &app, fmt.Sprintf("v%d", version.Version()), "", false)
 	c.Assert(err, check.IsNil)
 
-	versions, err = servicemanager.AppVersion.AppVersions(&app)
+	versions, err = servicemanager.AppVersion.AppVersions(context.TODO(), &app)
 	c.Assert(err, check.IsNil)
 	c.Assert(versions.Versions[version.Version()].Disabled, check.Equals, false)
 	c.Assert(versions.Versions[version.Version()].DisabledReason, check.Equals, "")
 
-	err = RollbackUpdate(&app, "v20", "", false)
+	err = RollbackUpdate(context.TODO(), &app, "v20", "", false)
 	c.Assert(err, check.NotNil)
 	c.Assert(err, check.ErrorMatches, "Invalid version: v20")
 }
@@ -1098,7 +1184,7 @@ func (s *S) TestRollbackUpdateInvalidApp(c *check.C) {
 		TeamOwner: s.team.Name,
 		Router:    "fake",
 	}
-	err := RollbackUpdate(&invalidApp, "v1", "", false)
+	err := RollbackUpdate(context.TODO(), &invalidApp, "v1", "", false)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "no versions available for app")
 }

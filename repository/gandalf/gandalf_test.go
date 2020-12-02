@@ -59,7 +59,7 @@ func (s *GandalfSuite) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func (s *GandalfSuite) TearDownTest(c *check.C) {
@@ -67,20 +67,20 @@ func (s *GandalfSuite) TearDownTest(c *check.C) {
 }
 
 func (s *GandalfSuite) TestHealthCheck(c *check.C) {
-	err := healthCheck()
+	err := healthCheck(context.TODO())
 	c.Assert(err, check.IsNil)
 }
 
 func (s *GandalfSuite) TestHealthCheckStatusFailure(c *check.C) {
 	s.server.PrepareFailure(gandalftest.Failure{Path: "/healthcheck", Method: "GET", Response: "epic fail"})
-	err := healthCheck()
+	err := healthCheck(context.TODO())
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "epic fail\n")
 }
 
 func (s *GandalfSuite) TestHealthCheckContentFailure(c *check.C) {
 	s.server.PrepareFailure(gandalftest.Failure{Code: http.StatusOK, Path: "/healthcheck", Method: "GET", Response: "epic fail"})
-	err := healthCheck()
+	err := healthCheck(context.TODO())
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "unexpected status - epic fail\n")
 }
@@ -90,7 +90,7 @@ func (s *GandalfSuite) TestHealthCheckDisabled(c *check.C) {
 	c.Assert(err, check.IsNil)
 	defer config.Set("git:api-server", old)
 	config.Unset("git:api-server")
-	err = healthCheck()
+	err = healthCheck(context.TODO())
 	c.Assert(err, check.Equals, hc.ErrDisabledComponent)
 }
 
@@ -100,7 +100,7 @@ func (s *GandalfSuite) TestSync(c *check.C) {
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
 	defer dbtest.ClearAllCollections(conn.Apps().Database)
-	var manager gandalfManager
+	manager := newManager()
 	user1 := auth.User{Email: "user1@company.com"}
 	user2 := auth.User{Email: "user2@company.com"}
 	err = conn.Users().Insert(user1, user2)
@@ -113,7 +113,7 @@ func (s *GandalfSuite) TestSync(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = user2.AddRole(role.Name, "superteam")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser(user1.Email)
+	err = manager.CreateUser(context.TODO(), user1.Email)
 	c.Assert(err, check.IsNil)
 	team := authTypes.Team{Name: "superteam"}
 	app1 := app.App{Name: "myapp", Teams: []string{team.Name}}
@@ -121,9 +121,9 @@ func (s *GandalfSuite) TestSync(c *check.C) {
 	app3 := app.App{Name: "hisapp", Teams: []string{team.Name}}
 	err = conn.Apps().Insert(app1, app2, app3)
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository(app2.Name, []string{user1.Email})
+	err = manager.CreateRepository(context.TODO(), app2.Name, []string{user1.Email})
 	c.Assert(err, check.IsNil)
-	err = Sync(&buf)
+	err = Sync(context.TODO(), &buf)
 	c.Assert(err, check.IsNil)
 	c.Assert(s.server.Users(), check.DeepEquals, []string{user1.Email, user2.Email})
 	expectedRepos := []gandalftest.Repository{
@@ -163,45 +163,45 @@ Syncing app "hisapp"... OK
 }
 
 func (s *GandalfSuite) TestCreateUser(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myself@tsuru.io")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.IsNil)
 	users := s.server.Users()
 	c.Assert(users, check.DeepEquals, []string{"myself@tsuru.io"})
 }
 
 func (s *GandalfSuite) TestCreateUserAlreadyExists(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myself@tsuru.io")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("myself@tsuru.io")
+	err = manager.CreateUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.Equals, repository.ErrUserAlreadyExists)
 }
 
 func (s *GandalfSuite) TestRemoveUser(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myself@tsuru.io")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("theirself@tsuru.io")
+	err = manager.CreateUser(context.TODO(), "theirself@tsuru.io")
 	c.Assert(err, check.IsNil)
-	err = manager.RemoveUser("myself@tsuru.io")
+	err = manager.RemoveUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.IsNil)
 	c.Assert(s.server.Users(), check.DeepEquals, []string{"theirself@tsuru.io"})
 }
 
 func (s *GandalfSuite) TestRemoveUserNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.RemoveUser("myself@tsuru.io")
+	manager := newManager()
+	err := manager.RemoveUser(context.TODO(), "myself@tsuru.io")
 	c.Assert(err, check.Equals, repository.ErrUserNotFound)
 }
 
 func (s *GandalfSuite) TestCreateRepository(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("user2")
+	err = manager.CreateUser(context.TODO(), "user2")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1", "user2"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1", "user2"})
 	c.Assert(err, check.IsNil)
 	repos := s.server.Repositories()
 	c.Assert(repos, check.HasLen, 1)
@@ -211,24 +211,24 @@ func (s *GandalfSuite) TestCreateRepository(c *check.C) {
 }
 
 func (s *GandalfSuite) TestCreateRepositoryDuplicate(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.Equals, repository.ErrRepositoryAlreadExists)
 }
 
 func (s *GandalfSuite) TestRemoveRepository(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("yourrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "yourrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	err = manager.RemoveRepository("yourrepo")
+	err = manager.RemoveRepository(context.TODO(), "yourrepo")
 	c.Assert(err, check.IsNil)
 	repos := s.server.Repositories()
 	c.Assert(repos, check.HasLen, 1)
@@ -236,38 +236,38 @@ func (s *GandalfSuite) TestRemoveRepository(c *check.C) {
 }
 
 func (s *GandalfSuite) TestRemoveRepositoryNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.RemoveRepository("myrepo")
+	manager := newManager()
+	err := manager.RemoveRepository(context.TODO(), "myrepo")
 	c.Assert(err, check.Equals, repository.ErrRepositoryNotFound)
 }
 
 func (s *GandalfSuite) TestGetRepository(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	repo, err := manager.GetRepository("myrepo")
+	repo, err := manager.GetRepository(context.TODO(), "myrepo")
 	c.Assert(err, check.IsNil)
 	c.Assert(repo.Name, check.Equals, "myrepo")
 	c.Assert(repo.ReadWriteURL, check.Equals, "git@localhost:myrepo.git")
 }
 
 func (s *GandalfSuite) TestGetRepositoryNotFound(c *check.C) {
-	var manager gandalfManager
-	_, err := manager.GetRepository("myrepo")
+	manager := newManager()
+	_, err := manager.GetRepository(context.TODO(), "myrepo")
 	c.Assert(err, check.Equals, repository.ErrRepositoryNotFound)
 }
 
 func (s *GandalfSuite) TestGrantAccess(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("myuser")
+	err = manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.GrantAccess("myrepo", "myuser")
+	err = manager.GrantAccess(context.TODO(), "myrepo", "myuser")
 	c.Assert(err, check.IsNil)
 	grants := s.server.Grants()
 	expected := map[string][]string{"myrepo": {"user1", "myuser"}}
@@ -275,20 +275,20 @@ func (s *GandalfSuite) TestGrantAccess(c *check.C) {
 }
 
 func (s *GandalfSuite) TestRevokeAccess(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("myuser")
+	err = manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateUser("otheruser")
+	err = manager.CreateUser(context.TODO(), "otheruser")
 	c.Assert(err, check.IsNil)
-	err = manager.GrantAccess("myrepo", "myuser")
+	err = manager.GrantAccess(context.TODO(), "myrepo", "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.GrantAccess("myrepo", "otheruser")
+	err = manager.GrantAccess(context.TODO(), "myrepo", "otheruser")
 	c.Assert(err, check.IsNil)
-	err = manager.RevokeAccess("myrepo", "myuser")
+	err = manager.RevokeAccess(context.TODO(), "myrepo", "myuser")
 	c.Assert(err, check.IsNil)
 	grants := s.server.Grants()
 	expected := map[string][]string{"myrepo": {"user1", "otheruser"}}
@@ -296,10 +296,10 @@ func (s *GandalfSuite) TestRevokeAccess(c *check.C) {
 }
 
 func (s *GandalfSuite) TestAddKey(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.IsNil)
 	keys, err := s.server.Keys("myuser")
 	c.Assert(err, check.IsNil)
@@ -308,22 +308,22 @@ func (s *GandalfSuite) TestAddKey(c *check.C) {
 }
 
 func (s *GandalfSuite) TestAddKeyDuplicate(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.Equals, repository.ErrKeyAlreadyExists)
 }
 
 func (s *GandalfSuite) TestRemoveKey(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.IsNil)
-	err = manager.RemoveKey("myuser", repository.Key{Name: "mykey"})
+	err = manager.RemoveKey(context.TODO(), "myuser", repository.Key{Name: "mykey"})
 	c.Assert(err, check.IsNil)
 	keys, err := s.server.Keys("myuser")
 	c.Assert(err, check.IsNil)
@@ -331,26 +331,26 @@ func (s *GandalfSuite) TestRemoveKey(c *check.C) {
 }
 
 func (s *GandalfSuite) TestRemoveKeyUserNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.RemoveKey("myuser", repository.Key{Name: "mykey"})
+	manager := newManager()
+	err := manager.RemoveKey(context.TODO(), "myuser", repository.Key{Name: "mykey"})
 	c.Assert(err, check.Equals, repository.ErrUserNotFound)
 }
 
 func (s *GandalfSuite) TestRemoveKeyNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.RemoveKey("myuser", repository.Key{Name: "mykey"})
+	err = manager.RemoveKey(context.TODO(), "myuser", repository.Key{Name: "mykey"})
 	c.Assert(err, check.Equals, repository.ErrKeyNotFound)
 }
 
 func (s *GandalfSuite) TestUpdateKey(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.IsNil)
-	err = manager.UpdateKey("myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
+	err = manager.UpdateKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
 	c.Assert(err, check.IsNil)
 	keys, err := s.server.Keys("myuser")
 	c.Assert(err, check.IsNil)
@@ -359,48 +359,48 @@ func (s *GandalfSuite) TestUpdateKey(c *check.C) {
 }
 
 func (s *GandalfSuite) TestUpdateKeyUserNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.UpdateKey("myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
+	manager := newManager()
+	err := manager.UpdateKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
 	c.Assert(err, check.Equals, repository.ErrUserNotFound)
 }
 
 func (s *GandalfSuite) TestUpdateKeyNotFound(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.UpdateKey("myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
+	err = manager.UpdateKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: otherPublicKey})
 	c.Assert(err, check.Equals, repository.ErrKeyNotFound)
 }
 
 func (s *GandalfSuite) TestListKeys(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("myuser")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
-	err = manager.AddKey("myuser", repository.Key{Name: "mykey", Body: publicKey})
+	err = manager.AddKey(context.TODO(), "myuser", repository.Key{Name: "mykey", Body: publicKey})
 	c.Assert(err, check.IsNil)
-	keys, err := manager.ListKeys("myuser")
+	keys, err := manager.ListKeys(context.TODO(), "myuser")
 	c.Assert(err, check.IsNil)
 	expected := []repository.Key{{Name: "mykey", Body: publicKey}}
 	c.Assert(keys, check.DeepEquals, expected)
 }
 
 func (s *GandalfSuite) TestDiff(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
 	s.server.PrepareDiff("myrepo", "some diff")
-	diff, err := manager.Diff("myrepo", "10", "11")
+	diff, err := manager.Diff(context.TODO(), "myrepo", "10", "11")
 	c.Assert(err, check.IsNil)
 	c.Assert(diff, check.Equals, "some diff")
 }
 
 func (s *GandalfSuite) TestCommitMessages(c *check.C) {
-	var manager gandalfManager
-	err := manager.CreateUser("user1")
+	manager := newManager()
+	err := manager.CreateUser(context.TODO(), "user1")
 	c.Assert(err, check.IsNil)
-	err = manager.CreateRepository("myrepo", []string{"user1"})
+	err = manager.CreateRepository(context.TODO(), "myrepo", []string{"user1"})
 	c.Assert(err, check.IsNil)
 	s.server.PrepareLogs("myrepo", gandalfRepo.GitHistory{
 		Commits: []gandalfRepo.GitLog{
@@ -408,7 +408,7 @@ func (s *GandalfSuite) TestCommitMessages(c *check.C) {
 			{Subject: "my subject2"},
 		},
 	})
-	msgs, err := manager.CommitMessages("myrepo", "x", 2)
+	msgs, err := manager.CommitMessages(context.TODO(), "myrepo", "x", 2)
 	c.Assert(err, check.IsNil)
 	c.Assert(msgs, check.DeepEquals, []string{"my subject1", "my subject2"})
 }

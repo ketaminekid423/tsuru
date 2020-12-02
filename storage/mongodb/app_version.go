@@ -5,6 +5,7 @@
 package mongodb
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/globalsign/mgo"
 	"github.com/globalsign/mgo/bson"
+	uuid "github.com/nu7hatch/gouuid"
+	"github.com/pkg/errors"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/app/image"
 	"github.com/tsuru/tsuru/db"
@@ -22,7 +25,7 @@ import (
 const (
 	defaultLegacyCollectionPrefix = "docker"
 
-	collectionName = "app_versions"
+	appVersionsCollectionName = "app_versions"
 )
 
 type legacyImageMetadata struct {
@@ -42,7 +45,7 @@ func (s *appVersionStorage) collection() (*storage.Collection, error) {
 	if err != nil {
 		return nil, err
 	}
-	coll := conn.Collection(collectionName)
+	coll := conn.Collection(appVersionsCollectionName)
 	err = coll.EnsureIndex(mgo.Index{
 		Key:    []string{"appname"},
 		Unique: true,
@@ -110,44 +113,85 @@ func (s *appVersionStorage) legacyBuildImages(appName string) ([]string, error) 
 	return imageData.Images, err
 }
 
-func (s *appVersionStorage) UpdateVersion(appName string, vi *appTypes.AppVersionInfo) error {
-	vi.UpdatedAt = time.Now().UTC()
-	return s.baseUpdate(appName, bson.M{
-		"$set": bson.M{fmt.Sprintf("versions.%d", vi.Version): vi},
-	})
+func (s *appVersionStorage) UpdateVersion(ctx context.Context, appName string, vi *appTypes.AppVersionInfo, opts ...*appTypes.AppVersionWriteOptions) error {
+	now := time.Now().UTC()
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		errors.WithMessage(err, "failed to generate uuid v4")
+	}
+	vi.UpdatedAt = now
+	return s.baseUpdate(ctx, appName, bson.M{
+		"$set": bson.M{
+			fmt.Sprintf("versions.%d", vi.Version): vi,
+			"updatedat":                            now,
+			"updatedhash":                          uuidV4.String(),
+		},
+	}, opts...)
 }
 
-func (s *appVersionStorage) UpdateVersionSuccess(appName string, vi *appTypes.AppVersionInfo) error {
-	vi.UpdatedAt = time.Now().UTC()
-	return s.baseUpdate(appName, bson.M{
+func (s *appVersionStorage) UpdateVersionSuccess(ctx context.Context, appName string, vi *appTypes.AppVersionInfo, opts ...*appTypes.AppVersionWriteOptions) error {
+	now := time.Now().UTC()
+	vi.UpdatedAt = now
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		errors.WithMessage(err, "failed to generate uuid v4")
+	}
+	return s.baseUpdate(ctx, appName, bson.M{
 		"$set": bson.M{
 			"lastsuccessfulversion":                vi.Version,
+			"updatedat":                            now,
+			"updatedhash":                          uuidV4.String(),
 			fmt.Sprintf("versions.%d", vi.Version): vi,
 		},
-	})
+	}, opts...)
 }
 
-func (s *appVersionStorage) baseUpdate(appName string, updateQuery bson.M) error {
+func (s *appVersionStorage) baseUpdate(ctx context.Context, appName string, updateQuery bson.M, opts ...*appTypes.AppVersionWriteOptions) error {
+	where := bson.M{"appname": appName}
+
+	// when receive a PreviousUpdatedHash will perform a optimistic update
+	if len(opts) > 0 && opts[0].PreviousUpdatedHash != "" {
+		where["updatedhash"] = opts[0].PreviousUpdatedHash
+	}
+	return s.baseUpdateWhere(ctx, where, updateQuery)
+}
+
+func (s *appVersionStorage) baseUpdateWhere(ctx context.Context, where, updateQuery bson.M) error {
+	span := newMongoDBSpan(ctx, mongoSpanUpdate, appVersionsCollectionName)
+	span.SetQueryStatement(where)
+
+	defer span.Finish()
+
 	coll, err := s.collection()
 	if err != nil {
 		return err
 	}
 	defer coll.Close()
-	err = coll.Update(bson.M{"appname": appName}, updateQuery)
+	err = coll.Update(where, updateQuery)
 	if err == mgo.ErrNotFound {
+		if _, exists := where["updatedhash"]; exists {
+			span.LogKV("event", appTypes.ErrTransactionCancelledByChange.Error())
+			return appTypes.ErrTransactionCancelledByChange
+		}
+		span.LogKV("event", appTypes.ErrNoVersionsAvailable.Error())
 		return appTypes.ErrNoVersionsAvailable
 	}
+	span.SetError(err)
 	return err
 }
 
-func (s *appVersionStorage) NewAppVersion(args appTypes.NewVersionArgs) (*appTypes.AppVersionInfo, error) {
-	appVersions, err := s.AppVersions(args.App)
+func (s *appVersionStorage) NewAppVersion(ctx context.Context, args appTypes.NewVersionArgs) (*appTypes.AppVersionInfo, error) {
+	appVersions, err := s.AppVersions(ctx, args.App)
 	if err != nil && err != appTypes.ErrNoVersionsAvailable {
 		return nil, err
 	}
 	currentCount := appVersions.Count + 1
 
 	now := time.Now().UTC()
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to generate uuid v4")
+	}
 	appVersionInfo := appTypes.AppVersionInfo{
 		Description:    args.Description,
 		Version:        currentCount,
@@ -157,78 +201,174 @@ func (s *appVersionStorage) NewAppVersion(args appTypes.NewVersionArgs) (*appTyp
 		UpdatedAt:      now,
 	}
 
+	query := bson.M{"appname": args.App.GetName()}
+	span := newMongoDBSpan(ctx, mongoSpanUpsert, appVersionsCollectionName)
+	span.SetQueryStatement(query)
+	defer span.Finish()
+
 	coll, err := s.collection()
 	if err != nil {
+		span.SetError(err)
 		return nil, err
 	}
 	defer coll.Close()
-	_, err = coll.Upsert(bson.M{"appname": args.App.GetName()}, bson.M{
+	_, err = coll.Upsert(query, bson.M{
 		"$set": bson.M{
-			"count": appVersionInfo.Version,
+			"count":       appVersionInfo.Version,
+			"updatedat":   time.Now().UTC(),
+			"updatedhash": uuidV4.String(),
 			fmt.Sprintf("versions.%d", appVersionInfo.Version): appVersionInfo,
 		},
 	})
 	if err != nil {
+		span.SetError(err)
 		return nil, err
 	}
 	return &appVersionInfo, nil
 }
 
-func (s *appVersionStorage) DeleteVersions(appName string) error {
-	coll, err := s.collection()
-	if err != nil {
-		return err
+func (s *appVersionStorage) DeleteVersions(ctx context.Context, appName string, opts ...*appTypes.AppVersionWriteOptions) error {
+	where := bson.M{"appname": appName}
+
+	// when receive a PreviousUpdatedHash will perform a optimistic delete
+	if len(opts) > 0 && opts[0].PreviousUpdatedHash != "" {
+		where["updatedhash"] = opts[0].PreviousUpdatedHash
 	}
-	defer coll.Close()
-	err = coll.Remove(bson.M{"appname": appName})
-	if err == mgo.ErrNotFound {
+
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		return errors.WithMessage(err, "failed to generate uuid v4")
+	}
+
+	err = s.baseUpdate(ctx, appName, bson.M{
+		"$set": bson.M{
+			"versions":        map[int]appTypes.AppVersionInfo{},
+			"updatedhash":     uuidV4.String(),
+			"markedtoremoval": false,
+		},
+	}, opts...)
+
+	if err == appTypes.ErrNoVersionsAvailable {
 		return nil
 	}
+
 	return err
 }
 
-func (s *appVersionStorage) AllAppVersions() ([]appTypes.AppVersions, error) {
+func (s *appVersionStorage) AllAppVersions(ctx context.Context, appNamesFilter ...string) ([]appTypes.AppVersions, error) {
+	span := newMongoDBSpan(ctx, mongoSpanFind, appVersionsCollectionName)
+	defer span.Finish()
+
 	coll, err := s.collection()
 	if err != nil {
+		span.SetError(err)
 		return nil, err
 	}
 	defer coll.Close()
 	var allAppVersions []appTypes.AppVersions
-	err = coll.Find(nil).All(&allAppVersions)
+	var filter bson.M
+	if len(appNamesFilter) > 0 {
+		filter = bson.M{"appname": bson.M{"$in": appNamesFilter}}
+	}
+	err = coll.Find(filter).All(&allAppVersions)
 	if err != nil {
+		span.SetError(err)
 		return nil, err
 	}
 	return allAppVersions, nil
 }
 
-func (s *appVersionStorage) AppVersions(app appTypes.App) (appTypes.AppVersions, error) {
+func (s *appVersionStorage) AppVersions(ctx context.Context, app appTypes.App) (appTypes.AppVersions, error) {
+	query := bson.M{"appname": app.GetName()}
+	span := newMongoDBSpan(ctx, mongoSpanFind, appVersionsCollectionName)
+	span.SetQueryStatement(query)
+	defer span.Finish()
+
 	coll, err := s.collection()
 	if err != nil {
+		span.SetError(err)
 		return appTypes.AppVersions{}, err
 	}
+
 	defer coll.Close()
 	var appVersions appTypes.AppVersions
-	err = coll.Find(bson.M{"appname": app.GetName()}).One(&appVersions)
+	err = coll.Find(query).One(&appVersions)
 	if err == mgo.ErrNotFound {
 		err = s.importLegacyVersions(app)
 		if err == nil {
-			err = coll.Find(bson.M{"appname": app.GetName()}).One(&appVersions)
+			err = coll.Find(query).One(&appVersions)
 		}
 	}
 	if err == mgo.ErrNotFound {
 		return appVersions, appTypes.ErrNoVersionsAvailable
 	}
+	span.SetError(err)
 	return appVersions, err
 }
 
-func (s *appVersionStorage) DeleteVersion(appName string, version int) error {
-	err := s.baseUpdate(appName, bson.M{
-		"$unset": bson.M{fmt.Sprintf("versions.%d", version): ""},
-	})
-	if err == mgo.ErrNotFound {
-		return appTypes.ErrNoVersionsAvailable
+func (s *appVersionStorage) DeleteVersionIDs(ctx context.Context, appName string, versions []int, opts ...*appTypes.AppVersionWriteOptions) error {
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		return errors.WithMessage(err, "failed to generate uuid v4")
 	}
-	return err
+	unset := bson.M{}
+	for _, version := range versions {
+		unset[fmt.Sprintf("versions.%d", version)] = ""
+	}
+	return s.baseUpdate(ctx, appName, bson.M{
+		"$unset": unset,
+		"$set": bson.M{
+			"updatedat":   time.Now().UTC(),
+			"updatedhash": uuidV4.String(),
+		},
+	}, opts...)
+}
+
+func (s *appVersionStorage) MarkToRemoval(ctx context.Context, appName string, opts ...*appTypes.AppVersionWriteOptions) error {
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		return errors.WithMessage(err, "failed to generate uuid v4")
+	}
+	update := bson.M{
+		"$set": bson.M{
+			"markedtoremoval": true,
+			"updatedat":       time.Now().UTC(),
+			"updatedhash":     uuidV4.String(),
+		},
+	}
+	return s.baseUpdate(ctx, appName, update)
+}
+
+func (s *appVersionStorage) MarkVersionsToRemoval(ctx context.Context, appName string, versions []int, opts ...*appTypes.AppVersionWriteOptions) error {
+	now := time.Now().UTC()
+	uuidV4, err := uuid.NewV4()
+	if err != nil {
+		return errors.WithMessage(err, "failed to generate uuid v4")
+	}
+
+	where := bson.M{
+		"appname": appName,
+	}
+
+	// when receive a PreviousUpdatedHash will perform a optimistic delete
+	if len(opts) > 0 && opts[0].PreviousUpdatedHash != "" {
+		where["updatedhash"] = opts[0].PreviousUpdatedHash
+	}
+
+	set := bson.M{
+		"updatedat":   now,
+		"updatedhash": uuidV4.String(),
+	}
+
+	for _, version := range versions {
+		versionKey := fmt.Sprintf("versions.%d", version)
+		where[versionKey] = bson.M{"$exists": true}
+		set[versionKey+".markedtoremoval"] = true
+		set[versionKey+".updatedat"] = now
+	}
+
+	update := bson.M{"$set": set}
+	return s.baseUpdateWhere(ctx, where, update)
 }
 
 func (s *appVersionStorage) importLegacyVersions(app appTypes.App) error {

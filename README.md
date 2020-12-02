@@ -1,6 +1,6 @@
 # tsuru
 
-[![Build Status](https://travis-ci.org/tsuru/tsuru.svg?branch=master)](https://travis-ci.org/tsuru/tsuru)
+[![Build Status](https://github.com/tsuru/tsuru/workflows/ci/badge.svg?branch=master)](https://github.com/tsuru/tsuru/actions)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tsuru/tsuru)](https://goreportcard.com/report/github.com/tsuru/tsuru)
 
 ## What is tsuru?
@@ -48,7 +48,7 @@ $ tsuru install create
 You need to have [Go](https://golang.org/doc/install) properly installed on your machine.
 
 ```
-$ git clone github.com/tsuru/tsuru-client $GOPATH/src/github.com/tsuru/tsuru-client
+$ git clone https://github.com/tsuru/tsuru-client $GOPATH/src/github.com/tsuru/tsuru-client
 $ cd $GOPATH/src/github.com/tsuru/tsuru-client
 $ make install
 ```

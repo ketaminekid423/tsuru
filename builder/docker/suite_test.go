@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"math/rand"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func (s *S) SetUpSuite(c *check.C) {
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }
 
@@ -80,7 +81,7 @@ func (s *S) SetUpTest(c *check.C) {
 	rand.Seed(0)
 	err := dbtest.ClearAllCollections(s.conn.Apps().Database)
 	c.Assert(err, check.IsNil)
-	err = pool.AddPool(pool.AddPoolOptions{
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "thepool",
 		Default:     true,
 		Provisioner: "fake",
@@ -92,10 +93,10 @@ func (s *S) SetUpTest(c *check.C) {
 	s.user = &auth.User{Email: "whiskeyjack@genabackis.com", Password: "123456", Quota: quota.UnlimitedQuota}
 	nativeScheme := auth.ManagedScheme(native.NativeScheme{})
 	app.AuthScheme = nativeScheme
-	_, err = nativeScheme.Create(s.user)
+	_, err = nativeScheme.Create(context.TODO(), s.user)
 	c.Assert(err, check.IsNil)
 	s.team = &authTypes.Team{Name: "admin"}
-	s.token, err = nativeScheme.Login(map[string]string{"email": s.user.Email, "password": "123456"})
+	s.token, err = nativeScheme.Login(context.TODO(), map[string]string{"email": s.user.Email, "password": "123456"})
 	c.Assert(err, check.IsNil)
 	servicemock.SetMockService(&s.mockService)
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {

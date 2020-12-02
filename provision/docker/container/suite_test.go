@@ -5,6 +5,7 @@
 package container
 
 import (
+	"context"
 	"net/url"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/tsuru/tsuru/provision/docker/types"
 	"github.com/tsuru/tsuru/provision/dockercommon"
 	"github.com/tsuru/tsuru/router/routertest"
+	servicemock "github.com/tsuru/tsuru/servicemanager/mock"
 	check "gopkg.in/check.v1"
 )
 
@@ -45,6 +47,7 @@ func (s *S) SetUpSuite(c *check.C) {
 	config.Set("docker:user", s.user)
 	config.Set("docker:repository-namespace", "tsuru")
 	config.Set("routers:fake:type", "fakeType")
+	servicemock.SetMockService(&servicemock.MockService{})
 }
 
 func (s *S) SetUpTest(c *check.C) {
@@ -68,11 +71,11 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func (s *S) removeTestContainer(c *Container) error {
-	routertest.FakeRouter.RemoveBackend(c.AppName)
+	routertest.FakeRouter.RemoveBackend(context.TODO(), c.AppName)
 	return c.Remove(s.cli, s.limiter)
 }
 
@@ -107,8 +110,8 @@ func (s *S) newContainer(opts newContainerOpts, cli *dockercommon.PullAndCreateC
 	if container.Image == "" {
 		container.Image = "tsuru/python:latest"
 	}
-	routertest.FakeRouter.AddBackend(routertest.FakeApp{Name: container.AppName})
-	routertest.FakeRouter.AddRoutes(container.AppName, []*url.URL{container.Address()})
+	routertest.FakeRouter.AddBackend(context.TODO(), routertest.FakeApp{Name: container.AppName})
+	routertest.FakeRouter.AddRoutes(context.TODO(), container.AppName, []*url.URL{container.Address()})
 	ports := map[docker.Port]struct{}{
 		docker.Port(provision.WebProcessDefaultPort() + "/tcp"): {},
 	}

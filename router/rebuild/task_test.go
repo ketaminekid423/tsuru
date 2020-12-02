@@ -24,11 +24,11 @@ func (s *S) TestRoutesRebuildOrEnqueueNoError(c *check.C) {
 		Platform:  "static",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	invalidAddr, err := url.Parse("http://invalid.addr")
 	c.Assert(err, check.IsNil)
-	err = routertest.FakeRouter.AddRoutes(a.GetName(), []*url.URL{invalidAddr})
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), a.GetName(), []*url.URL{invalidAddr})
 	c.Assert(err, check.IsNil)
 	rebuild.RoutesRebuildOrEnqueue(a.GetName())
 	c.Assert(routertest.FakeRouter.HasRoute(a.GetName(), invalidAddr.String()), check.Equals, false)
@@ -40,11 +40,11 @@ func (s *S) TestRoutesRebuildOrEnqueueForceEnqueue(c *check.C) {
 		Platform:  "static",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	invalidAddr, err := url.Parse("http://invalid.addr")
 	c.Assert(err, check.IsNil)
-	err = routertest.FakeRouter.AddRoutes(a.GetName(), []*url.URL{invalidAddr})
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), a.GetName(), []*url.URL{invalidAddr})
 	c.Assert(err, check.IsNil)
 	routertest.FakeRouter.FailForIp(invalidAddr.String())
 	rebuild.RoutesRebuildOrEnqueue(a.GetName())
@@ -62,7 +62,7 @@ func (s *S) TestRoutesRebuildOrEnqueueLocked(c *check.C) {
 		Platform:  "static",
 		TeamOwner: s.team.Name,
 	}
-	err := app.CreateApp(a, s.user)
+	err := app.CreateApp(context.TODO(), a, s.user)
 	c.Assert(err, check.IsNil)
 	evt, err := event.NewInternal(&event.Opts{
 		Target:       event.Target{Type: event.TargetTypeApp, Value: a.Name},
@@ -72,7 +72,7 @@ func (s *S) TestRoutesRebuildOrEnqueueLocked(c *check.C) {
 	c.Assert(err, check.IsNil)
 	invalidAddr, err := url.Parse("http://invalid.addr")
 	c.Assert(err, check.IsNil)
-	err = routertest.FakeRouter.AddRoutes(a.GetName(), []*url.URL{invalidAddr})
+	err = routertest.FakeRouter.AddRoutes(context.TODO(), a.GetName(), []*url.URL{invalidAddr})
 	c.Assert(err, check.IsNil)
 	rebuild.LockedRoutesRebuildOrEnqueue(a.GetName())
 	c.Assert(routertest.FakeRouter.HasRoute(a.GetName(), invalidAddr.String()), check.Equals, true)

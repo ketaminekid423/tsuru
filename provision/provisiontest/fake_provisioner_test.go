@@ -6,6 +6,7 @@ package provisiontest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/ioutil"
 	"sort"
@@ -23,7 +24,6 @@ import (
 	"github.com/tsuru/tsuru/router/routertest"
 	servicemock "github.com/tsuru/tsuru/servicemanager/mock"
 	provTypes "github.com/tsuru/tsuru/types/provision"
-	"github.com/tsuru/tsuru/types/quota"
 	check "gopkg.in/check.v1"
 )
 
@@ -171,31 +171,6 @@ func (s *S) TestFakeAppUnbindUnitNotBound(c *check.C) {
 	c.Assert(err.Error(), check.Equals, "not bound")
 }
 
-func (s *S) TestFakeAppGetQuota(c *check.C) {
-	app := NewFakeApp("sou", "otm", 0)
-	c.Assert(app.GetQuota(), check.DeepEquals, quota.UnlimitedQuota)
-	q := quota.Quota{Limit: 10, InUse: 3}
-	app.Quota = q
-	c.Assert(app.GetQuota(), check.DeepEquals, q)
-}
-
-func (s *S) TestFakeAppSetQuotaInUse(c *check.C) {
-	q := quota.Quota{Limit: 10, InUse: 3}
-	app := NewFakeApp("sou", "otm", 0)
-	app.Quota = q
-	c.Assert(app.GetQuota(), check.DeepEquals, q)
-	q.InUse = 8
-	err := app.SetQuotaInUse(q.InUse)
-	c.Assert(err, check.IsNil)
-	c.Assert(app.GetQuota(), check.DeepEquals, q)
-	err = app.SetQuotaInUse(q.Limit + 1)
-	c.Assert(err, check.NotNil)
-	e, ok := err.(*quota.QuotaExceededError)
-	c.Assert(ok, check.Equals, true)
-	c.Assert(e.Available, check.Equals, uint(q.Limit))
-	c.Assert(e.Requested, check.Equals, uint(q.Limit+1))
-}
-
 func (s *S) TestFakeAppGetCname(c *check.C) {
 	app := NewFakeApp("sou", "otm", 0)
 	app.cname = []string{"cname1", "cname2"}
@@ -328,7 +303,7 @@ func (s *S) TestFakeAppHasLog(c *check.C) {
 func (s *S) TestProvisioned(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Provisioned(app), check.Equals, true)
 	otherapp := NewFakeApp("blue-sector", "rush", 1)
@@ -425,7 +400,7 @@ func (s *S) TestPrepareFailure(c *check.C) {
 func (s *S) TestProvision(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	pApp := p.apps[app.GetName()]
 	c.Assert(pApp.app, check.DeepEquals, app)
@@ -437,7 +412,7 @@ func (s *S) TestProvisionWithPreparedFailure(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
 	p.PrepareFailure("Provision", errors.New("Failed to provision."))
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Failed to provision.")
 }
@@ -445,9 +420,9 @@ func (s *S) TestProvisionWithPreparedFailure(c *check.C) {
 func (s *S) TestDoubleProvision(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.Provision(app)
+	err = p.Provision(context.TODO(), app)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "App already provisioned.")
 }
@@ -464,8 +439,8 @@ func (s *S) TestRestart(c *check.C) {
 	defer conn.Apps().Remove(bson.M{"name": nApp.Name})
 	c.Assert(err, check.IsNil)
 	p := NewFakeProvisioner()
-	p.Provision(a)
-	err = p.Restart(a, "web", nil, nil)
+	p.Provision(context.TODO(), a)
+	err = p.Restart(context.TODO(), a, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Restarts(a, "web"), check.Equals, 1)
 }
@@ -473,10 +448,10 @@ func (s *S) TestRestart(c *check.C) {
 func (s *S) TestStart(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	err := p.Start(app, "", nil)
+	p.Provision(context.TODO(), app)
+	err := p.Start(context.TODO(), app, "", nil)
 	c.Assert(err, check.IsNil)
-	err = p.Start(app, "web", nil)
+	err = p.Start(context.TODO(), app, "web", nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Starts(app, ""), check.Equals, 1)
 	c.Assert(p.Starts(app, "web"), check.Equals, 1)
@@ -485,8 +460,8 @@ func (s *S) TestStart(c *check.C) {
 func (s *S) TestStop(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	err := p.Stop(app, "", nil)
+	p.Provision(context.TODO(), app)
+	err := p.Stop(context.TODO(), app, "", nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Stops(app, ""), check.Equals, 1)
 }
@@ -494,8 +469,8 @@ func (s *S) TestStop(c *check.C) {
 func (s *S) TestSleep(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	err := p.Sleep(app, "", nil)
+	p.Provision(context.TODO(), app)
+	err := p.Sleep(context.TODO(), app, "", nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Sleeps(app, ""), check.Equals, 1)
 }
@@ -503,7 +478,7 @@ func (s *S) TestSleep(c *check.C) {
 func (s *S) TestRestartNotProvisioned(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Restart(app, "web", nil, nil)
+	err := p.Restart(context.TODO(), app, "web", nil, nil)
 	c.Assert(err, check.Equals, errNotProvisioned)
 }
 
@@ -511,7 +486,7 @@ func (s *S) TestRestartWithPreparedFailure(c *check.C) {
 	app := NewFakeApp("fairy-tale", "shaman", 1)
 	p := NewFakeProvisioner()
 	p.PrepareFailure("Restart", errors.New("Failed to restart."))
-	err := p.Restart(app, "web", nil, nil)
+	err := p.Restart(context.TODO(), app, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Failed to restart.")
 }
@@ -519,8 +494,8 @@ func (s *S) TestRestartWithPreparedFailure(c *check.C) {
 func (s *S) TestDestroy(c *check.C) {
 	app := NewFakeApp("kid-gloves", "rush", 1)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	err := p.Destroy(app)
+	p.Provision(context.TODO(), app)
+	err := p.Destroy(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Provisioned(app), check.Equals, false)
 }
@@ -529,7 +504,7 @@ func (s *S) TestDestroyWithPreparedFailure(c *check.C) {
 	app := NewFakeApp("red-lenses", "rush", 1)
 	p := NewFakeProvisioner()
 	p.PrepareFailure("Destroy", errors.New("Failed to destroy."))
-	err := p.Destroy(app)
+	err := p.Destroy(context.TODO(), app)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Failed to destroy.")
 }
@@ -537,18 +512,18 @@ func (s *S) TestDestroyWithPreparedFailure(c *check.C) {
 func (s *S) TestDestroyNotProvisionedApp(c *check.C) {
 	app := NewFakeApp("red-lenses", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Destroy(app)
+	err := p.Destroy(context.TODO(), app)
 	c.Assert(err, check.Equals, errNotProvisioned)
 }
 
 func (s *S) TestAddUnits(c *check.C) {
 	app := NewFakeApp("mystic-rhythms", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "worker", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "worker", nil, nil)
 	c.Assert(err, check.IsNil)
 	allUnits := p.GetUnits(app)
 	c.Assert(allUnits, check.HasLen, 4)
@@ -565,11 +540,11 @@ func (s *S) TestAddUnits(c *check.C) {
 func (s *S) TestAddUnitsCopiesTheUnitsSlice(c *check.C) {
 	app := NewFakeApp("fiction", "python", 0)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	defer p.Destroy(app)
-	err := p.AddUnits(app, 3, "web", nil, nil)
+	p.Provision(context.TODO(), app)
+	defer p.Destroy(context.TODO(), app)
+	err := p.AddUnits(context.TODO(), app, 3, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	units[0].ID = "something-else"
 	c.Assert(units[0].ID, check.Not(check.Equals), p.GetUnits(app)[1].ID)
@@ -577,7 +552,7 @@ func (s *S) TestAddUnitsCopiesTheUnitsSlice(c *check.C) {
 
 func (s *S) TestAddZeroUnits(c *check.C) {
 	p := NewFakeProvisioner()
-	err := p.AddUnits(nil, 0, "web", nil, nil)
+	err := p.AddUnits(context.TODO(), nil, 0, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Cannot add 0 units.")
 }
@@ -585,14 +560,14 @@ func (s *S) TestAddZeroUnits(c *check.C) {
 func (s *S) TestAddUnitsUnprovisionedApp(c *check.C) {
 	app := NewFakeApp("mystic-rhythms", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.AddUnits(app, 1, "web", nil, nil)
+	err := p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.Equals, errNotProvisioned)
 }
 
 func (s *S) TestAddUnitsFailure(c *check.C) {
 	p := NewFakeProvisioner()
 	p.PrepareFailure("AddUnits", errors.New("Cannot add more units."))
-	err := p.AddUnits(nil, 10, "web", nil, nil)
+	err := p.AddUnits(context.TODO(), nil, 10, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "Cannot add more units.")
 }
@@ -601,13 +576,13 @@ func (s *S) TestAddUnitsNodeAware(c *check.C) {
 	app := NewFakeApp("mystic-rhythms", "rush", 0)
 	p := NewFakeProvisioner()
 	p.Reset()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddNode(provision.AddNodeOptions{
+	err = p.AddNode(context.TODO(), provision.AddNodeOptions{
 		Address: "http://n1:123",
 	})
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	allUnits := p.GetUnits(app)
 	c.Assert(allUnits, check.HasLen, 2)
@@ -619,9 +594,9 @@ func (s *S) TestAddUnitsToNode(c *check.C) {
 	app := NewFakeApp("mystic-rhythms", "rush", 0)
 	p := NewFakeProvisioner()
 	p.Reset()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddNode(provision.AddNodeOptions{
+	err = p.AddNode(context.TODO(), provision.AddNodeOptions{
 		Address: "http://n1:123",
 	})
 	c.Assert(err, check.IsNil)
@@ -636,12 +611,12 @@ func (s *S) TestAddUnitsToNode(c *check.C) {
 func (s *S) TestRemoveUnits(c *check.C) {
 	app := NewFakeApp("hemispheres", "rush", 0)
 	p := NewFakeProvisioner()
-	p.Provision(app)
-	err := p.AddUnits(app, 5, "web", nil, nil)
+	p.Provision(context.TODO(), app)
+	err := p.AddUnits(context.TODO(), app, 5, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	oldUnits := p.GetUnits(app)
 	buf := bytes.NewBuffer(nil)
-	err = p.RemoveUnits(app, 3, "web", nil, buf)
+	err = p.RemoveUnits(context.TODO(), app, 3, "web", nil, buf)
 	c.Assert(err, check.IsNil)
 	units := p.GetUnits(app)
 	c.Assert(units, check.HasLen, 2)
@@ -657,15 +632,15 @@ func (s *S) TestRemoveUnits(c *check.C) {
 func (s *S) TestRemoveUnitsDifferentProcesses(c *check.C) {
 	app := NewFakeApp("hemispheres", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 5, "p1", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 5, "p1", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "p2", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "p2", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "p3", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "p3", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.RemoveUnits(app, 2, "p2", nil, nil)
+	err = p.RemoveUnits(context.TODO(), app, 2, "p2", nil, nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.GetUnits(app), check.HasLen, 7)
 	for i, u := range p.GetUnits(app) {
@@ -680,11 +655,11 @@ func (s *S) TestRemoveUnitsDifferentProcesses(c *check.C) {
 func (s *S) TestRemoveUnitsTooManyUnits(c *check.C) {
 	app := NewFakeApp("hemispheres", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 1, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.RemoveUnits(app, 3, "web", nil, nil)
+	err = p.RemoveUnits(context.TODO(), app, 3, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "too many units to remove")
 }
@@ -692,13 +667,13 @@ func (s *S) TestRemoveUnitsTooManyUnits(c *check.C) {
 func (s *S) TestRemoveUnitsTooManyUnitsOfProcess(c *check.C) {
 	app := NewFakeApp("hemispheres", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 1, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 4, "worker", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 4, "worker", nil, nil)
 	c.Assert(err, check.IsNil)
-	err = p.RemoveUnits(app, 3, "web", nil, nil)
+	err = p.RemoveUnits(context.TODO(), app, 3, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "too many units to remove")
 }
@@ -706,14 +681,14 @@ func (s *S) TestRemoveUnitsTooManyUnitsOfProcess(c *check.C) {
 func (s *S) TestRemoveUnitsUnprovisionedApp(c *check.C) {
 	app := NewFakeApp("tears", "bruce", 0)
 	p := NewFakeProvisioner()
-	err := p.RemoveUnits(app, 1, "web", nil, nil)
+	err := p.RemoveUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.Equals, errNotProvisioned)
 }
 
 func (s *S) TestRemoveUnitsFailure(c *check.C) {
 	p := NewFakeProvisioner()
 	p.PrepareFailure("RemoveUnits", errors.New("This program has performed an illegal operation."))
-	err := p.RemoveUnits(nil, 0, "web", nil, nil)
+	err := p.RemoveUnits(context.TODO(), nil, 0, "web", nil, nil)
 	c.Assert(err, check.NotNil)
 	c.Assert(err.Error(), check.Equals, "This program has performed an illegal operation.")
 }
@@ -723,14 +698,14 @@ func (s *S) TestExecuteCommand(c *check.C) {
 	output := []byte("myoutput!")
 	app := NewFakeApp("grand-designs", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 2, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 2, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units := p.GetUnits(app)
 	p.PrepareOutput(output)
 	p.PrepareOutput(output)
-	err = p.ExecuteCommand(provision.ExecOptions{
+	err = p.ExecuteCommand(context.TODO(), provision.ExecOptions{
 		Stdout: &buf,
 		App:    app,
 		Cmds:   []string{"ls", "-l"},
@@ -754,13 +729,13 @@ func (s *S) TestExecuteCommand(c *check.C) {
 func (s *S) TestExecuteCommandFailureNoOutput(c *check.C) {
 	app := NewFakeApp("manhattan-project", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 1, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units := p.GetUnits(app)
 	p.PrepareFailure("ExecuteCommand", errors.New("Failed to run command."))
-	err = p.ExecuteCommand(provision.ExecOptions{
+	err = p.ExecuteCommand(context.TODO(), provision.ExecOptions{
 		App:   app,
 		Cmds:  []string{"ls", "-l"},
 		Units: []string{units[0].ID},
@@ -773,14 +748,14 @@ func (s *S) TestExecuteCommandWithOutputAndFailure(c *check.C) {
 	var buf bytes.Buffer
 	app := NewFakeApp("marathon", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 1, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units := p.GetUnits(app)
 	p.PrepareFailure("ExecuteCommand", errors.New("Failed to run command."))
 	p.PrepareOutput([]byte("myoutput!"))
-	err = p.ExecuteCommand(provision.ExecOptions{
+	err = p.ExecuteCommand(context.TODO(), provision.ExecOptions{
 		App:    app,
 		Stderr: &buf,
 		Cmds:   []string{"ls", "-l"},
@@ -794,12 +769,12 @@ func (s *S) TestExecuteCommandWithOutputAndFailure(c *check.C) {
 func (s *S) TestExecuteComandTimeout(c *check.C) {
 	app := NewFakeApp("territories", "rush", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
-	err = p.AddUnits(app, 1, "web", nil, nil)
+	err = p.AddUnits(context.TODO(), app, 1, "web", nil, nil)
 	c.Assert(err, check.IsNil)
 	units := p.GetUnits(app)
-	err = p.ExecuteCommand(provision.ExecOptions{
+	err = p.ExecuteCommand(context.TODO(), provision.ExecOptions{
 		App:   app,
 		Cmds:  []string{"ls", "-l"},
 		Units: []string{units[0].ID},
@@ -814,7 +789,7 @@ func (s *S) TestExecuteCommandNoUnits(c *check.C) {
 	app := NewFakeApp("grand-designs", "rush", 1)
 	p := NewFakeProvisioner()
 	p.PrepareOutput(output)
-	err := p.ExecuteCommand(provision.ExecOptions{
+	err := p.ExecuteCommand(context.TODO(), provision.ExecOptions{
 		App:    app,
 		Stdout: &buf,
 		Cmds:   []string{"ls", "-l"},
@@ -834,7 +809,7 @@ func (s *S) TestExecuteCommandNoUnits(c *check.C) {
 func (s *S) TestAddr(c *check.C) {
 	app := NewFakeApp("quick", "who", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	addr, err := p.Addr(app)
 	c.Assert(err, check.IsNil)
@@ -853,7 +828,7 @@ func (s *S) TestAddrFailure(c *check.C) {
 func (s *S) TestSetCName(c *check.C) {
 	app := NewFakeApp("jean", "mj", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	err = p.SetCName(app, "cname.com")
 	c.Assert(err, check.IsNil)
@@ -880,7 +855,7 @@ func (s *S) TestSetCNameFailure(c *check.C) {
 func (s *S) TestUnsetCName(c *check.C) {
 	app := NewFakeApp("jean", "mj", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	err = p.SetCName(app, "cname.com")
 	c.Assert(err, check.IsNil)
@@ -911,7 +886,7 @@ func (s *S) TestUnsetCNameFailure(c *check.C) {
 func (s *S) TestHasCName(c *check.C) {
 	app := NewFakeApp("jean", "mj", 0)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	err = p.SetCName(app, "cname.com")
 	c.Assert(err, check.IsNil)
@@ -924,10 +899,10 @@ func (s *S) TestHasCName(c *check.C) {
 func (s *S) TestFakeProvisionerAddUnit(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	p.AddUnit(app, provision.Unit{ID: "red-sector/1"})
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(units, check.HasLen, 1)
 	c.Assert(p.apps[app.GetName()].unitLen, check.Equals, 1)
@@ -936,10 +911,10 @@ func (s *S) TestFakeProvisionerAddUnit(c *check.C) {
 func (s *S) TestFakeProvisionerUnits(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	p.AddUnit(app, provision.Unit{ID: "red-sector/1"})
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(units, check.HasLen, 1)
 }
@@ -947,7 +922,7 @@ func (s *S) TestFakeProvisionerUnits(c *check.C) {
 func (s *S) TestFakeProvisionerUnitsAppNotFound(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(units, check.HasLen, 0)
 }
@@ -955,13 +930,13 @@ func (s *S) TestFakeProvisionerUnitsAppNotFound(c *check.C) {
 func (s *S) TestFakeProvisionerSetUnitStatus(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "red-sector", ID: "red-sector/1", Status: provision.StatusStarted}
 	p.AddUnit(app, unit)
 	err = p.SetUnitStatus(unit, provision.StatusError)
 	c.Assert(err, check.IsNil)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit = units[0]
 	c.Assert(unit.Status, check.Equals, provision.StatusError)
@@ -970,14 +945,14 @@ func (s *S) TestFakeProvisionerSetUnitStatus(c *check.C) {
 func (s *S) TestFakeProvisionerSetUnitStatusNoApp(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "red-sector", ID: "red-sector/1", Status: provision.StatusStarted}
 	p.AddUnit(app, unit)
 	unit = provision.Unit{ID: "red-sector/1"}
 	err = p.SetUnitStatus(unit, provision.StatusError)
 	c.Assert(err, check.IsNil)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit = units[0]
 	c.Assert(unit.Status, check.Equals, provision.StatusError)
@@ -992,7 +967,7 @@ func (s *S) TestFakeProvisionerSetUnitStatusAppNotFound(c *check.C) {
 func (s *S) TestFakeProvisionerSetUnitStatusUnitNotFound(c *check.C) {
 	app := NewFakeApp("red-sector", "rush", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "red-sector", ID: "red-sector/1", Status: provision.StatusStarted}
 	err = p.SetUnitStatus(unit, provision.StatusError)
@@ -1005,16 +980,16 @@ func (s *S) TestFakeProvisionerSetUnitStatusUnitNotFound(c *check.C) {
 func (s *S) TestFakeProvisionerRegisterUnit(c *check.C) {
 	app := NewFakeApp("shine-on", "diamond", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "shine-on", ID: "unit/1"}
 	p.AddUnit(app, unit)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	ip := units[0].IP
-	err = p.RegisterUnit(app, unit.ID, nil)
+	err = p.RegisterUnit(context.TODO(), app, unit.ID, nil)
 	c.Assert(err, check.IsNil)
-	units, err = p.Units(app)
+	units, err = p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(units[0].IP, check.Equals, ip+"-updated")
 }
@@ -1022,27 +997,27 @@ func (s *S) TestFakeProvisionerRegisterUnit(c *check.C) {
 func (s *S) TestFakeProvisionerRegisterUnitNotFound(c *check.C) {
 	app := NewFakeApp("shine-on", "diamond", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "shine-on", ID: "unit/1"}
-	err = p.RegisterUnit(app, unit.ID, nil)
+	err = p.RegisterUnit(context.TODO(), app, unit.ID, nil)
 	c.Assert(err, check.ErrorMatches, "unit \"unit/1\" not found")
 }
 
 func (s *S) TestFakeProvisionerRegisterUnitSavesData(c *check.C) {
 	app := NewFakeApp("shine-on", "diamond", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "shine-on", ID: "unit/1"}
 	p.AddUnit(app, unit)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	ip := units[0].IP
 	data := map[string]interface{}{"my": "data"}
-	err = p.RegisterUnit(app, unit.ID, data)
+	err = p.RegisterUnit(context.TODO(), app, unit.ID, data)
 	c.Assert(err, check.IsNil)
-	units, err = p.Units(app)
+	units, err = p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	c.Assert(units[0].IP, check.Equals, ip+"-updated")
 	c.Assert(p.CustomData(app), check.DeepEquals, data)
@@ -1050,7 +1025,7 @@ func (s *S) TestFakeProvisionerRegisterUnitSavesData(c *check.C) {
 
 func (s *S) TestFakeProvisionerAddNode(c *check.C) {
 	p := NewFakeProvisioner()
-	p.AddNode(provision.AddNodeOptions{Address: "mynode", Pool: "mypool", Metadata: map[string]string{
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode", Pool: "mypool", Metadata: map[string]string{
 		"m1": "v1",
 	}})
 	c.Assert(p.nodes, check.DeepEquals, map[string]FakeNode{"mynode": {
@@ -1070,18 +1045,18 @@ func (l NodeList) Less(i, j int) bool { return l[i].Address() < l[j].Address() }
 
 func (s *S) TestFakeProvisionerListNodes(c *check.C) {
 	p := NewFakeProvisioner()
-	p.AddNode(provision.AddNodeOptions{Address: "mynode1", Pool: "mypool", Metadata: map[string]string{
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Pool: "mypool", Metadata: map[string]string{
 		"m1": "v1",
 	}})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
-	nodes, err := p.ListNodes(nil)
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
+	nodes, err := p.ListNodes(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	sort.Sort(NodeList(nodes))
 	c.Assert(nodes, check.DeepEquals, []provision.Node{
 		&FakeNode{Addr: "mynode1", status: "enabled", PoolName: "mypool", Meta: map[string]string{"m1": "v1"}, p: p},
 		&FakeNode{Addr: "mynode2", status: "enabled", PoolName: "mypool", Meta: map[string]string{}, p: p},
 	})
-	nodes, err = p.ListNodes([]string{"mynode2"})
+	nodes, err = p.ListNodes(context.TODO(), []string{"mynode2"})
 	c.Assert(err, check.IsNil)
 	c.Assert(nodes, check.DeepEquals, []provision.Node{
 		&FakeNode{Addr: "mynode2", status: "enabled", PoolName: "mypool", Meta: map[string]string{}, p: p},
@@ -1090,15 +1065,15 @@ func (s *S) TestFakeProvisionerListNodes(c *check.C) {
 
 func (s *S) TestFakeProvisionerListNodesByFilter(c *check.C) {
 	p := NewFakeProvisioner()
-	p.AddNode(provision.AddNodeOptions{Address: "mynode1", Pool: "mypool", Metadata: map[string]string{
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Pool: "mypool", Metadata: map[string]string{
 		"m1": "v1",
 		"m2": "v2",
 	}})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode2", Pool: "mypool", Metadata: map[string]string{
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode2", Pool: "mypool", Metadata: map[string]string{
 		"m1": "v1",
 	}})
 	filter := &provTypes.NodeFilter{Metadata: map[string]string{"m1": "v1"}}
-	nodes, err := p.ListNodesByFilter(filter)
+	nodes, err := p.ListNodesByFilter(context.TODO(), filter)
 	c.Assert(err, check.IsNil)
 	sort.Sort(NodeList(nodes))
 	c.Assert(nodes, check.DeepEquals, []provision.Node{
@@ -1106,7 +1081,7 @@ func (s *S) TestFakeProvisionerListNodesByFilter(c *check.C) {
 		&FakeNode{Addr: "mynode2", status: "enabled", PoolName: "mypool", Meta: map[string]string{"m1": "v1"}, p: p},
 	})
 	filter = &provTypes.NodeFilter{Metadata: map[string]string{"m1": "v1", "m2": "v2"}}
-	nodes, err = p.ListNodesByFilter(filter)
+	nodes, err = p.ListNodesByFilter(context.TODO(), filter)
 	c.Assert(err, check.IsNil)
 	sort.Sort(NodeList(nodes))
 	c.Assert(nodes, check.DeepEquals, []provision.Node{
@@ -1118,9 +1093,9 @@ func (s *S) TestFakeProvisionerRebalanceNodes(c *check.C) {
 	p := NewFakeProvisioner()
 	app := NewFakeApp("shine-on", "diamond", 1)
 	app.Pool = "mypool"
-	p.Provision(app)
-	p.AddNode(provision.AddNodeOptions{Address: "mynode1", Pool: "mypool"})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
+	p.Provision(context.TODO(), app)
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Pool: "mypool"})
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
 	p.AddUnitsToNode(app, 4, "web", nil, "mynode1")
 	w := bytes.Buffer{}
 	evt, err := event.New(&event.Opts{
@@ -1131,7 +1106,7 @@ func (s *S) TestFakeProvisionerRebalanceNodes(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	evt.SetLogWriter(&w)
-	isRebalance, err := p.RebalanceNodes(provision.RebalanceNodesOptions{
+	isRebalance, err := p.RebalanceNodes(context.TODO(), provision.RebalanceNodesOptions{
 		Event:          evt,
 		Pool:           "mypool",
 		MetadataFilter: map[string]string{"m1": "x1"},
@@ -1139,7 +1114,7 @@ func (s *S) TestFakeProvisionerRebalanceNodes(c *check.C) {
 	c.Assert(err, check.IsNil)
 	c.Assert(isRebalance, check.Equals, true)
 	c.Assert(w.String(), check.Matches, `(?s).*rebalancing - dry: false, force: false.*filtering metadata: map\[m1:x1\].*filtering pool: mypool.*`)
-	units, err := p.Units(app)
+	units, err := p.Units(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	var addrs []string
 	for _, u := range units {
@@ -1153,13 +1128,13 @@ func (s *S) TestFakeProvisionerRebalanceNodesMultiplePools(c *check.C) {
 	p := NewFakeProvisioner()
 	app1 := NewFakeApp("a1", "diamond", 1)
 	app1.Pool = "mypool"
-	p.Provision(app1)
+	p.Provision(context.TODO(), app1)
 	app2 := NewFakeApp("a2", "diamond", 1)
 	app2.Pool = "mypool2"
-	p.Provision(app2)
-	p.AddNode(provision.AddNodeOptions{Address: "mynode1", Pool: "mypool"})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode3", Pool: "mypool2"})
+	p.Provision(context.TODO(), app2)
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Pool: "mypool"})
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode2", Pool: "mypool"})
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode3", Pool: "mypool2"})
 	p.AddUnitsToNode(app1, 4, "web", nil, "mynode1")
 	p.AddUnitsToNode(app2, 4, "web", nil, "mynode3")
 	w := bytes.Buffer{}
@@ -1171,13 +1146,13 @@ func (s *S) TestFakeProvisionerRebalanceNodesMultiplePools(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	evt.SetLogWriter(&w)
-	isRebalance, err := p.RebalanceNodes(provision.RebalanceNodesOptions{
+	isRebalance, err := p.RebalanceNodes(context.TODO(), provision.RebalanceNodesOptions{
 		Event: evt,
 	})
 	c.Assert(err, check.IsNil)
 	c.Assert(isRebalance, check.Equals, true)
 	c.Assert(w.String(), check.Matches, `(?s).*rebalancing - dry: false, force: false.*`)
-	nodes, err := p.ListNodes(nil)
+	nodes, err := p.ListNodes(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(nodes, check.HasLen, 3)
 	u0, _ := nodes[0].Units()
@@ -1192,11 +1167,11 @@ func (s *S) TestFakeProvisionerRebalanceNodesBalanced(c *check.C) {
 	p := NewFakeProvisioner()
 	app := NewFakeApp("shine-on", "diamond", 1)
 	app.Pool = "mypool"
-	p.Provision(app)
-	p.AddNode(provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
+	p.Provision(context.TODO(), app)
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
 		"pool": "mypool",
 	}})
-	p.AddNode(provision.AddNodeOptions{Address: "mynode2", Metadata: map[string]string{
+	p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode2", Metadata: map[string]string{
 		"pool": "mypool",
 	}})
 	p.AddUnitsToNode(app, 2, "web", nil, "mynode1")
@@ -1210,7 +1185,7 @@ func (s *S) TestFakeProvisionerRebalanceNodesBalanced(c *check.C) {
 	})
 	c.Assert(err, check.IsNil)
 	evt.SetLogWriter(&w)
-	isRebalance, err := p.RebalanceNodes(provision.RebalanceNodesOptions{
+	isRebalance, err := p.RebalanceNodes(context.TODO(), provision.RebalanceNodesOptions{
 		Event:          evt,
 		MetadataFilter: map[string]string{"pool": "mypool"},
 	})
@@ -1222,9 +1197,9 @@ func (s *S) TestFakeProvisionerFilterAppsByUnitStatus(c *check.C) {
 	app1 := NewFakeApp("fairy-tale", "shaman", 1)
 	app2 := NewFakeApp("unfairly-tale", "shaman", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app1)
+	err := p.Provision(context.TODO(), app1)
 	c.Assert(err, check.IsNil)
-	err = p.Provision(app2)
+	err = p.Provision(context.TODO(), app2)
 	c.Assert(err, check.IsNil)
 	unit := provision.Unit{AppName: "fairy-tale", ID: "unit/1", Status: provision.StatusStarting}
 	p.AddUnit(app1, unit)
@@ -1232,7 +1207,7 @@ func (s *S) TestFakeProvisionerFilterAppsByUnitStatus(c *check.C) {
 	p.AddUnit(app2, unit)
 	err = p.SetUnitStatus(unit, provision.StatusError)
 	c.Assert(err, check.IsNil)
-	apps, err := p.FilterAppsByUnitStatus([]provision.App{app1, app2}, []string{"starting"})
+	apps, err := p.FilterAppsByUnitStatus(context.TODO(), []provision.App{app1, app2}, []string{"starting"})
 	c.Assert(apps, check.DeepEquals, []provision.App{app1})
 	c.Assert(err, check.IsNil)
 }
@@ -1260,11 +1235,11 @@ func (s *S) TestGetAppFromUnitIDNotFound(c *check.C) {
 func (s *S) TestFakeNodeHealthChecker(c *check.C) {
 	p := NewFakeProvisioner()
 	p.Reset()
-	err := p.AddNode(provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
+	err := p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
 		"pool": "mypool",
 	}})
 	c.Assert(err, check.IsNil)
-	nodes, err := p.ListNodes(nil)
+	nodes, err := p.ListNodes(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	hcNode, ok := nodes[0].(provision.NodeHealthChecker)
 	c.Assert(ok, check.Equals, true)
@@ -1275,11 +1250,11 @@ func (s *S) TestFakeNodeHealthChecker(c *check.C) {
 func (s *S) TestFakeNodeHealthCheckerSetHealth(c *check.C) {
 	p := NewFakeProvisioner()
 	p.Reset()
-	err := p.AddNode(provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
+	err := p.AddNode(context.TODO(), provision.AddNodeOptions{Address: "mynode1", Metadata: map[string]string{
 		"pool": "mypool",
 	}})
 	c.Assert(err, check.IsNil)
-	nodes, err := p.ListNodes(nil)
+	nodes, err := p.ListNodes(context.TODO(), nil)
 	c.Assert(err, check.IsNil)
 	fakeNode, ok := nodes[0].(*FakeNode)
 	c.Assert(ok, check.Equals, true)
@@ -1292,17 +1267,17 @@ func (s *S) TestFakeNodeHealthCheckerSetHealth(c *check.C) {
 
 func (s *S) TestFakeUpgradeNodeContainer(c *check.C) {
 	p := NewFakeProvisioner()
-	err := p.UpgradeNodeContainer("c1", "p1", ioutil.Discard)
+	err := p.UpgradeNodeContainer(context.TODO(), "c1", "p1", ioutil.Discard)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.HasNodeContainer("c1", "p1"), check.Equals, true)
 }
 
 func (s *S) TestFakeRemoveNodeContainer(c *check.C) {
 	p := NewFakeProvisioner()
-	err := p.UpgradeNodeContainer("c1", "p1", ioutil.Discard)
+	err := p.UpgradeNodeContainer(context.TODO(), "c1", "p1", ioutil.Discard)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.HasNodeContainer("c1", "p1"), check.Equals, true)
-	err = p.RemoveNodeContainer("c1", "p1", ioutil.Discard)
+	err = p.RemoveNodeContainer(context.TODO(), "c1", "p1", ioutil.Discard)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.HasNodeContainer("c1", "p1"), check.Equals, false)
 }
@@ -1310,10 +1285,10 @@ func (s *S) TestFakeRemoveNodeContainer(c *check.C) {
 func (s *S) TestUpdateApp(c *check.C) {
 	app := NewFakeApp("myapp", "arch", 1)
 	p := NewFakeProvisioner()
-	err := p.Provision(app)
+	err := p.Provision(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	newApp := NewFakeApp("myapp", "python", 1)
-	err = p.UpdateApp(app, newApp, nil)
+	err = p.UpdateApp(context.TODO(), app, newApp, nil)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.Provisioned(newApp), check.Equals, true)
 	c.Assert(p.apps["myapp"].app, check.DeepEquals, newApp)

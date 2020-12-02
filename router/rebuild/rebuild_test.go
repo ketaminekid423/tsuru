@@ -5,6 +5,7 @@
 package rebuild_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sort"
@@ -20,7 +21,7 @@ import (
 )
 
 func newVersion(c *check.C, a appTypes.App) appTypes.AppVersion {
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: a,
 	})
 	c.Assert(err, check.IsNil)
@@ -33,16 +34,16 @@ func newVersion(c *check.C, a appTypes.App) appTypes.AppVersion {
 
 func (s *S) TestRebuildRoutes(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 3, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 3, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.RemoveRoutes(a.Name, []*url.URL{units[2].Address})
-	routertest.FakeRouter.AddRoutes(a.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	routertest.FakeRouter.RemoveRoutes(context.TODO(), a.Name, []*url.URL{units[2].Address})
+	routertest.FakeRouter.AddRoutes(context.TODO(), a.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -54,7 +55,7 @@ func (s *S) TestRebuildRoutes(c *check.C) {
 			},
 		},
 	})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, units[0].Address.String()), check.Equals, true)
@@ -64,16 +65,16 @@ func (s *S) TestRebuildRoutes(c *check.C) {
 
 func (s *S) TestRebuildRoutesDRY(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 3, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 3, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.RemoveRoutes(a.Name, []*url.URL{units[2].Address})
-	routertest.FakeRouter.AddRoutes(a.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
-	changes, err := rebuild.RebuildRoutes(&a, true)
+	routertest.FakeRouter.RemoveRoutes(context.TODO(), a.Name, []*url.URL{units[2].Address})
+	routertest.FakeRouter.AddRoutes(context.TODO(), a.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, true)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -85,7 +86,7 @@ func (s *S) TestRebuildRoutesDRY(c *check.C) {
 			},
 		},
 	})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, units[0].Address.String()), check.Equals, true)
@@ -95,18 +96,18 @@ func (s *S) TestRebuildRoutesDRY(c *check.C) {
 
 func (s *S) TestRebuildRoutesTCPRoutes(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 3, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 3, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
 	for _, u := range units {
-		routertest.FakeRouter.RemoveRoutes(a.Name, []*url.URL{u.Address})
-		routertest.FakeRouter.AddRoutes(a.Name, []*url.URL{{Scheme: "tcp", Host: u.Address.Host}})
+		routertest.FakeRouter.RemoveRoutes(context.TODO(), a.Name, []*url.URL{u.Address})
+		routertest.FakeRouter.AddRoutes(context.TODO(), a.Name, []*url.URL{{Scheme: "tcp", Host: u.Address.Host}})
 	}
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -118,7 +119,7 @@ func (s *S) TestRebuildRoutesTCPRoutes(c *check.C) {
 			},
 		},
 	})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, units[0].Address.Host), check.Equals, true)
@@ -134,28 +135,28 @@ func (l URLList) Less(i, j int) bool { return l[i].String() < l[j].String() }
 
 func (s *S) TestRebuildRoutesAfterSwap(c *check.C) {
 	a1 := app.App{Name: "my-test-app-1", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a1, s.user)
+	err := app.CreateApp(context.TODO(), &a1, s.user)
 	c.Assert(err, check.IsNil)
 	a2 := app.App{Name: "my-test-app-2", TeamOwner: s.team.Name}
-	err = app.CreateApp(&a2, s.user)
+	err = app.CreateApp(context.TODO(), &a2, s.user)
 	c.Assert(err, check.IsNil)
 	version1 := newVersion(c, &a1)
 	version2 := newVersion(c, &a2)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a1, 3, "web", version1, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a1, 3, "web", version1, nil)
 	c.Assert(err, check.IsNil)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a2, 2, "web", version2, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a2, 2, "web", version2, nil)
 	c.Assert(err, check.IsNil)
 	units1, err := a1.Units()
 	c.Assert(err, check.IsNil)
 	units2, err := a2.Units()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddRoutes(a1.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
-	routertest.FakeRouter.RemoveRoutes(a2.Name, []*url.URL{units2[0].Address})
-	err = routertest.FakeRouter.Swap(a1.Name, a2.Name, false)
+	routertest.FakeRouter.AddRoutes(context.TODO(), a1.Name, []*url.URL{{Scheme: "http", Host: "invalid:1234"}})
+	routertest.FakeRouter.RemoveRoutes(context.TODO(), a2.Name, []*url.URL{units2[0].Address})
+	err = routertest.FakeRouter.Swap(context.TODO(), a1.Name, a2.Name, false)
 	c.Assert(err, check.IsNil)
-	changes1, err := rebuild.RebuildRoutes(&a1, false)
+	changes1, err := rebuild.RebuildRoutes(context.TODO(), &a1, false)
 	c.Assert(err, check.IsNil)
-	changes2, err := rebuild.RebuildRoutes(&a2, false)
+	changes2, err := rebuild.RebuildRoutes(context.TODO(), &a2, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes1, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -177,9 +178,9 @@ func (s *S) TestRebuildRoutesAfterSwap(c *check.C) {
 			},
 		},
 	})
-	routes1, err := routertest.FakeRouter.Routes(a1.Name)
+	routes1, err := routertest.FakeRouter.Routes(context.TODO(), a1.Name)
 	c.Assert(err, check.IsNil)
-	routes2, err := routertest.FakeRouter.Routes(a2.Name)
+	routes2, err := routertest.FakeRouter.Routes(context.TODO(), a2.Name)
 	c.Assert(err, check.IsNil)
 	sort.Sort(URLList(routes1))
 	sort.Sort(URLList(routes2))
@@ -201,15 +202,15 @@ func (s *S) TestRebuildRoutesAfterSwap(c *check.C) {
 
 func (s *S) TestRebuildRoutesRecreatesBackend(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 3, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 3, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.RemoveBackend(a.Name)
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	routertest.FakeRouter.RemoveBackend(context.TODO(), a.Name)
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes["fake"].PrefixResults, check.HasLen, 1)
 	sort.Strings(changes["fake"].PrefixResults[0].Added)
@@ -227,7 +228,7 @@ func (s *S) TestRebuildRoutesRecreatesBackend(c *check.C) {
 			},
 		},
 	})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, units[0].Address.String()), check.Equals, true)
@@ -237,15 +238,15 @@ func (s *S) TestRebuildRoutesRecreatesBackend(c *check.C) {
 
 func (s *S) TestRebuildRoutesBetweenRouters(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 1, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 1, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	oldAddrs, err := a.GetAddresses()
 	c.Assert(err, check.IsNil)
 	a.Router = "fake-hc"
-	_, err = rebuild.RebuildRoutes(&a, false)
+	_, err = rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	newAddrs, err := a.GetAddresses()
 	c.Assert(err, check.IsNil)
@@ -254,23 +255,23 @@ func (s *S) TestRebuildRoutesBetweenRouters(c *check.C) {
 
 func (s *S) TestRebuildRoutesRecreatesCnames(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 	version := newVersion(c, &a)
-	err = provisiontest.ProvisionerInstance.AddUnits(&a, 1, "web", version, nil)
+	err = provisiontest.ProvisionerInstance.AddUnits(context.TODO(), &a, 1, "web", version, nil)
 	c.Assert(err, check.IsNil)
 	units, err := a.Units()
 	c.Assert(err, check.IsNil)
 	err = a.AddCName("my.cname.com")
 	c.Assert(err, check.IsNil)
 	c.Assert(routertest.FakeRouter.HasCName("my.cname.com"), check.Equals, true)
-	err = routertest.FakeRouter.UnsetCName("my.cname.com", a.Name)
+	err = routertest.FakeRouter.UnsetCName(context.TODO(), "my.cname.com", a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routertest.FakeRouter.HasCName("my.cname.com"), check.Equals, false)
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{"fake": {PrefixResults: []rebuild.RebuildPrefixResult{{}}}})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 1)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, units[0].Address.String()), check.Equals, true)
@@ -279,9 +280,9 @@ func (s *S) TestRebuildRoutesRecreatesCnames(c *check.C) {
 
 func (s *S) TestRebuildRoutesSetsHealthcheck(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: &a,
 	})
 	c.Assert(err, check.IsNil)
@@ -298,9 +299,9 @@ func (s *S) TestRebuildRoutesSetsHealthcheck(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = version.CommitSuccessful()
 	c.Assert(err, check.IsNil)
-	err = routertest.FakeRouter.RemoveHealthcheck("my-test-app")
+	err = routertest.FakeRouter.RemoveHealthcheck(context.TODO(), "my-test-app")
 	c.Assert(err, check.IsNil)
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{"fake": {PrefixResults: []rebuild.RebuildPrefixResult{{}}}})
 	expected := routerTypes.HealthcheckData{
@@ -313,7 +314,7 @@ func (s *S) TestRebuildRoutesSetsHealthcheck(c *check.C) {
 func (s *S) TestRebuildRoutesMultiplePrefixes(c *check.C) {
 	a := app.App{Name: "my-test-app", TeamOwner: s.team.Name}
 	a.Routers = []appTypes.AppRouter{{Name: "fake"}, {Name: "fake-prefix"}}
-	err := app.CreateApp(&a, s.user)
+	err := app.CreateApp(context.TODO(), &a, s.user)
 	c.Assert(err, check.IsNil)
 
 	provisiontest.ProvisionerInstance.MockRoutableAddresses(&a, []appTypes.RoutableAddresses{
@@ -334,7 +335,7 @@ func (s *S) TestRebuildRoutesMultiplePrefixes(c *check.C) {
 		},
 	})
 
-	changes, err := rebuild.RebuildRoutes(&a, false)
+	changes, err := rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -359,40 +360,40 @@ func (s *S) TestRebuildRoutesMultiplePrefixes(c *check.C) {
 			},
 		},
 	})
-	routes, err := routertest.FakeRouter.Routes(a.Name)
+	routes, err := routertest.FakeRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, "http://u1"), check.Equals, true)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, "http://u2"), check.Equals, true)
 	c.Assert(routertest.FakeRouter.HasRoute(a.Name, "http://u3"), check.Equals, true)
-	routes, err = routertest.PrefixRouter.Routes(a.Name)
+	routes, err = routertest.PrefixRouter.Routes(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.HasLen, 3)
 	c.Assert(routertest.PrefixRouter.HasRoute(a.Name, "http://u1"), check.Equals, true)
 	c.Assert(routertest.PrefixRouter.HasRoute(a.Name, "http://u2"), check.Equals, true)
 	c.Assert(routertest.PrefixRouter.HasRoute(a.Name, "http://u3"), check.Equals, true)
 
-	err = routertest.PrefixRouter.RemoveRoutesPrefix(a.Name, appTypes.RoutableAddresses{
+	err = routertest.PrefixRouter.RemoveRoutesPrefix(context.TODO(), a.Name, appTypes.RoutableAddresses{
 		Addresses: []*url.URL{{Host: "u2", Scheme: "http"}},
 	}, true)
 	c.Assert(err, check.IsNil)
-	err = routertest.PrefixRouter.RemoveRoutesPrefix(a.Name, appTypes.RoutableAddresses{
+	err = routertest.PrefixRouter.RemoveRoutesPrefix(context.TODO(), a.Name, appTypes.RoutableAddresses{
 		Prefix:    "web",
 		Addresses: []*url.URL{{Host: "u4", Scheme: "http"}},
 	}, true)
 	c.Assert(err, check.IsNil)
-	err = routertest.PrefixRouter.AddRoutesPrefix(a.Name, appTypes.RoutableAddresses{
+	err = routertest.PrefixRouter.AddRoutesPrefix(context.TODO(), a.Name, appTypes.RoutableAddresses{
 		Prefix:    "web",
 		Addresses: []*url.URL{{Host: "invalid", Scheme: "http"}},
 	}, true)
 	c.Assert(err, check.IsNil)
-	err = routertest.PrefixRouter.AddRoutesPrefix(a.Name, appTypes.RoutableAddresses{
+	err = routertest.PrefixRouter.AddRoutesPrefix(context.TODO(), a.Name, appTypes.RoutableAddresses{
 		Prefix:    "old",
 		Addresses: []*url.URL{{Host: "u9", Scheme: "http"}},
 	}, true)
 	c.Assert(err, check.IsNil)
 
-	changes, err = rebuild.RebuildRoutes(&a, false)
+	changes, err = rebuild.RebuildRoutes(context.TODO(), &a, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(changes, check.DeepEquals, map[string]rebuild.RebuildRoutesResult{
 		"fake": {
@@ -422,7 +423,7 @@ func (s *S) TestRebuildRoutesMultiplePrefixes(c *check.C) {
 		},
 	})
 
-	prefixRoutes, err := routertest.PrefixRouter.RoutesPrefix(a.Name)
+	prefixRoutes, err := routertest.PrefixRouter.RoutesPrefix(context.TODO(), a.Name)
 	c.Assert(err, check.IsNil)
 	sort.Slice(prefixRoutes, func(i, j int) bool {
 		return prefixRoutes[i].Prefix < prefixRoutes[j].Prefix

@@ -1,6 +1,8 @@
 package migrate
 
 import (
+	"context"
+
 	"github.com/pkg/errors"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/app"
@@ -13,10 +15,11 @@ import (
 // on a Kubernetes cluster. This is done by re-provisioning the App
 // on the cluster.
 func MigrateAppsCRDs() error {
+	ctx := context.TODO()
 	config.Set("kubernetes:use-pool-namespaces", false)
 	defer config.Unset("kubernetes:use-pool-namespaces")
 	prov := kubernetes.GetProvisioner()
-	pools, err := pool.ListAllPools()
+	pools, err := pool.ListAllPools(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to list pools")
 	}
@@ -26,13 +29,13 @@ func MigrateAppsCRDs() error {
 			kubePools = append(kubePools, p.Name)
 		}
 	}
-	apps, err := app.List(&app.Filter{Pools: kubePools})
+	apps, err := app.List(ctx, &app.Filter{Pools: kubePools})
 	if err != nil {
 		return errors.Wrap(err, "failed to list apps")
 	}
 	multiErr := tsuruerrors.NewMultiError()
 	for _, a := range apps {
-		errProv := prov.Provision(&a)
+		errProv := prov.Provision(ctx, &a)
 		if errProv != nil {
 			multiErr.Add(errProv)
 		}

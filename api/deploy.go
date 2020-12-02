@@ -32,6 +32,7 @@ const eventIDHeader = "X-Tsuru-Eventid"
 //   403: Forbidden
 //   404: Not found
 func deploy(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	opts, err := prepareToBuild(r)
 	if err != nil {
 		return err
@@ -64,14 +65,14 @@ func deploy(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 		commit = ""
 		userName = t.GetUserName()
 	}
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
 	message := InputValue(r, "message")
 	if commit != "" && message == "" {
 		var messages []string
-		messages, err = repository.Manager().CommitMessages(instance.Name, commit, 1)
+		messages, err = repository.Manager().CommitMessages(ctx, instance.Name, commit, 1)
 		if err != nil {
 			return err
 		}
@@ -110,12 +111,15 @@ func deploy(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
 		return err
 	}
 	defer func() { evt.DoneCustomData(err, map[string]string{"image": imageID}) }()
+	ctx, cancel := evt.CancelableContext(opts.App.Context())
+	defer cancel()
+	opts.App.ReplaceContext(ctx)
 	w.Header().Set(eventIDHeader, evt.UniqueID.Hex())
 	opts.Event = evt
 	writer := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "please wait...")
 	defer writer.Stop()
 	opts.OutputStream = writer
-	imageID, err = app.Deploy(opts)
+	imageID, err = app.Deploy(ctx, opts)
 	if err == nil {
 		fmt.Fprintln(w, "\nOK")
 	}
@@ -151,12 +155,13 @@ func permSchemeForDeploy(opts app.DeployOptions) *permission.PermissionScheme {
 //   403: Forbidden
 //   404: Not found
 func diffDeploy(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	writer := tsuruIo.NewKeepAliveWriter(w, 30*time.Second, "")
 	defer writer.Stop()
 	fmt.Fprint(w, "Saving the difference between the old and new code\n")
 	appName := r.URL.Query().Get(":appname")
 	diff := InputValue(r, "customdata")
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{Code: http.StatusNotFound, Message: err.Error()}
 	}
@@ -186,8 +191,9 @@ func diffDeploy(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   403: Forbidden
 //   404: Not found
 func deployRollback(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":appname")
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{Code: http.StatusNotFound, Message: fmt.Sprintf("App %s not found.", appName)}
 	}
@@ -240,8 +246,11 @@ func deployRollback(w http.ResponseWriter, r *http.Request, t auth.Token) error 
 		return err
 	}
 	defer func() { evt.DoneCustomData(err, map[string]string{"image": imageID}) }()
+	ctx, cancel := evt.CancelableContext(opts.App.Context())
+	defer cancel()
+	opts.App.ReplaceContext(ctx)
 	opts.Event = evt
-	imageID, err = app.Deploy(opts)
+	imageID, err = app.Deploy(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -256,6 +265,7 @@ func deployRollback(w http.ResponseWriter, r *http.Request, t auth.Token) error 
 //   200: OK
 //   204: No content
 func deploysList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	contexts := permission.ContextsForPermission(t, permission.PermAppReadDeploy)
 	if len(contexts) == 0 {
 		w.WriteHeader(http.StatusNoContent)
@@ -267,7 +277,7 @@ func deploysList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 	limit := r.URL.Query().Get("limit")
 	skipInt, _ := strconv.Atoi(skip)
 	limitInt, _ := strconv.Atoi(limit)
-	deploys, err := app.ListDeploys(filter, skipInt, limitInt)
+	deploys, err := app.ListDeploys(ctx, filter, skipInt, limitInt)
 	if err != nil {
 		return err
 	}
@@ -288,6 +298,7 @@ func deploysList(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   401: Unauthorized
 //   404: Not found
 func deployInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	depID := r.URL.Query().Get(":deploy")
 	deploy, err := app.GetDeploy(depID)
 	if err != nil {
@@ -296,7 +307,7 @@ func deployInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		}
 		return err
 	}
-	dbApp, err := app.GetByName(deploy.App)
+	dbApp, err := app.GetByName(ctx, deploy.App)
 	if err != nil {
 		return err
 	}
@@ -319,8 +330,9 @@ func deployInfo(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   403: Forbidden
 //   404: Not found
 func deployRebuild(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":appname")
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{Code: http.StatusNotFound, Message: fmt.Sprintf("App %s not found.", appName)}
 	}
@@ -362,8 +374,11 @@ func deployRebuild(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 		return err
 	}
 	defer func() { evt.DoneCustomData(err, map[string]string{"image": imageID}) }()
+	ctx, cancel := evt.CancelableContext(opts.App.Context())
+	defer cancel()
+	opts.App.ReplaceContext(ctx)
 	opts.Event = evt
-	imageID, err = app.Deploy(opts)
+	imageID, err = app.Deploy(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -379,8 +394,9 @@ func deployRebuild(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   400: Invalid data
 //   403: Forbidden
 func deployRollbackUpdate(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	appName := r.URL.Query().Get(":appname")
-	instance, err := app.GetByName(appName)
+	instance, err := app.GetByName(ctx, appName)
 	if err != nil {
 		return &tsuruErrors.HTTP{
 			Code:    http.StatusBadRequest,
@@ -429,7 +445,7 @@ func deployRollbackUpdate(w http.ResponseWriter, r *http.Request, t auth.Token) 
 		return err
 	}
 	defer func() { evt.Done(err) }()
-	err = app.RollbackUpdate(instance, img, reason, disableRollback)
+	err = app.RollbackUpdate(ctx, instance, img, reason, disableRollback)
 	if err != nil {
 		return &tsuruErrors.HTTP{
 			Code:    http.StatusBadRequest,

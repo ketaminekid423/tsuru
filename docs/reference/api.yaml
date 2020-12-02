@@ -60,6 +60,40 @@ paths:
         - service
       security:
         - Bearer: []
+  /1.0/services/{service}/instances:
+    parameters:
+      - name: service
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: Service name.
+    post:
+      operationId: InstanceCreate
+      description: Create a service instance
+      consumes:
+        - application/json
+      parameters:
+        - name: instance
+          required: true
+          in: body
+          schema:
+            $ref: "#/definitions/ServiceInstance"
+      responses:
+        "200":
+          description: Service instance created
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Service not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - service
+      security:
+        - Bearer: []
   /1.0/services/{service}/instances/{instance}:
     parameters:
       - name: service
@@ -147,6 +181,69 @@ paths:
             $ref: "#/definitions/ErrorMessage"
         "404":
           description: Service instance not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - service
+      security:
+        - Bearer: []
+
+  /1.0/services/{service}/instances/{instance}/{app}:
+    parameters:
+      - name: service
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: Service name.
+      - name: instance
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: Instance name.
+      - name: app
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: App name.
+    put:
+      operationId: ServiceInstanceBind
+      description: Bind the service instance to app
+      parameters:
+        - name: bindData
+          in: body
+          schema:
+            $ref: "#/definitions/ServiceInstanceBind"
+      produces:
+        - application/x-json-stream
+      responses:
+        "200":
+          description: Instance bound to the app.
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - service
+      security:
+        - Bearer: []
+    delete:
+      operationId: ServiceInstanceUnbind
+      description: Unbind the service instance from app
+      parameters:
+        - name: unbindData
+          in: body
+          schema:
+            $ref: "#/definitions/ServiceInstanceUnbind"
+      produces:
+        - application/x-json-stream
+      responses:
+        "200":
+          description: Instance has been unbound from the app.
+        "401":
+          description: Unauthorized
           schema:
             $ref: "#/definitions/ErrorMessage"
       tags:
@@ -335,7 +432,7 @@ paths:
           required: true
           in: body
           schema:
-            $ref: "#/definitions/AppCreateData"
+            $ref: "#/definitions/InputApp"
       produces:
         - application/json
       consumes:
@@ -366,16 +463,16 @@ paths:
       security:
         - Bearer: []
   /1.0/apps/{app}:
+    parameters:
+      - name: app
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: App name.
     get:
       operationId: AppGet
       description: Get info about a tsuru app.
-      parameters:
-        - name: app
-          in: path
-          required: true
-          type: string
-          minLength: 1
-          description: Appname.
       produces:
         - application/json
       responses:
@@ -398,13 +495,6 @@ paths:
     delete:
       operationId: AppDelete
       description: Delete a tsuru app.
-      parameters:
-        - name: app
-          in: path
-          required: true
-          type: string
-          minLength: 1
-          description: App name.
       produces:
         - application/x-json-stream
       responses:
@@ -426,12 +516,13 @@ paths:
       operationId: AppUpdate
       description: Update a tsuru app.
       parameters:
-        - name: app
-          in: path
+        - name: appdata
           required: true
-          type: string
-          minLength: 1
-          description: App name.
+          in: body
+          schema:
+            $ref: "#/definitions/UpdateApp"
+      consumes:
+        - application/json
       produces:
       - application/x-json-stream
       responses:
@@ -1027,7 +1118,7 @@ paths:
       operationId: UsersList
       description: List users.
       parameters:
-        - name: email
+        - name: userEmail
           in: query
           required: true
           type: string
@@ -2406,7 +2497,355 @@ paths:
         - cluster
       security:
         - Bearer: []
+  /1.3/constraints:
+    get:
+      operationId: ConstraintList
+      description: List pool constraints
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: PoolConstraints
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: "#/definitions/PoolConstraint"
+        "204":
+          description: No content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - pool
+      security:
+        - Bearer: []
+    put:
+      operationId: ConstraintSet
+      description: Update a service instance
+      consumes:
+        - application/json
+      parameters:
+        - name: poolConstraint
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/PoolConstraintSet"
+      responses:
+        "200":
+          description: Pool constraint set
+        "400":
+          description: Invalid data
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - pool
+      security:
+        - Bearer: []
+  /1.3/routers:
+    get:
+      operationId: RouterList
+      description: List available routers
+      produces:
+        - application/json
+      responses:
+        "200":
+          description: Routers
+          schema:
+            type: array
+            items:
+              type: object
+              $ref: "#/definitions/PlanRouter"
+        "204":
+          description: No content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - router
+      security:
+        - Bearer: []
+  /1.8/routers:
+    post:
+      operationId: RouterCreate
+      description: Adds a new dynamic router
+      consumes:
+        - application/json
+      parameters:
+        - name: router
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/DynamicRouter"
+      responses:
+        "201":
+          description: Dynamic router added
+        "400":
+          description: Invalid data
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - router
+      security:
+        - Bearer: []
+  /1.8/routers/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: Dynamic router name.
+    put:
+      operationId: RouterUpdate
+      description: Updates a dynamic router
+      consumes:
+        - application/json
+      parameters:
+        - name: router
+          required: true
+          in: body
+          schema:
+            $ref: "#/definitions/DynamicRouter"
+      responses:
+        "200":
+          description: Dynamic router updated
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Dynamic router not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - router
+      security:
+        - Bearer: []
+    delete:
+      operationId: RouterDelete
+      description: Deletes a dynamic router
+      responses:
+        "200":
+          description: Dynamic router deleted
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Dynamic router not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - router
+      security:
+        - Bearer: []
+  /1.2/nodecontainers:
+    post:
+      operationId: NodeContainerCreate
+      description: Creates container that runs on every node
+      consumes:
+        - application/json
+      parameters:
+        - name: nodecontainer
+          required: true
+          in: body
+          schema:
+            $ref: "#/definitions/NodeContainer"
+      responses:
+        "200":
+          description: Node container created
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "400":
+          description: Wrong configuration
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - nodecontainer
+      security:
+        - Bearer: []
+  /1.9/roles/{role_name}/group:
+    post:
+      operationId: AssignRoleToGroup
+      description: Assigns a role to a group.
+      consumes:
+        - application/json
+      parameters:
+        - name: role_name
+          required: true
+          in: path
+          type: string
+        - name: token
+          required: true
+          in: body
+          schema:
+            $ref: "#/definitions/AssignGroupArgs"
+      responses:
+        "200":
+          description: Role assigned.
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Role not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - auth
+      security:
+        - Bearer: []
+  /1.6/roles/{role_name}/group/{group_name}:
+    delete:
+      operationId: DissociateRoleFromGroup
+      description: Dissociates a role from a group.
+      parameters:
+        - name: role_name
+          required: true
+          in: path
+          type: string
+        - name: group_name
+          required: true
+          in: path
+          type: string
+        - name: context
+          required: true
+          in: query
+          type: string
+      responses:
+        "200":
+          description: Role dissociated.
+        "401":
+          description: Unauthorized.
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: Role not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - auth
+      security:
+        - Bearer: []
+  /1.9/apps/{app}/units/autoscale:
+    parameters:
+      - name: app
+        in: path
+        required: true
+        type: string
+        minLength: 1
+        description: App name.
+    post:
+      operationId: AutoScaleAdd
+      description: Add new unit autoscale spec.
+      parameters:
+        - name: autoScaleSpec
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/AutoScaleSpec"
+      consumes:
+        - application/json
+      responses:
+        "200":
+          description: AutoScale updated
+        "400":
+          description: Invalid data
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: App not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - app
+      security:
+        - Bearer: []
+    delete:
+      operationId: AutoScaleRemove
+      description: Remove unit autoscale spec.
+      parameters:
+        - name: process
+          required: true
+          in: query
+          type: string
+      consumes:
+        - application/json
+      responses:
+        "200":
+          description: AutoScale removed
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+        "404":
+          description: App not found
+          schema:
+            $ref: "#/definitions/ErrorMessage"
+      tags:
+        - app
+      security:
+        - Bearer: []
 definitions:
+  AutoScaleSpec:
+    description: Units Auto Scale spec
+    type: object
+    properties:
+      process:
+        type: string
+      minUnits:
+        type: integer
+      maxUnits:
+        type: integer
+      averageCPU:
+        type: string
+      version:
+        type: integer
+  DynamicRouter:
+    description: Dynamic router
+    type: object
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+      config:
+        type: object
+  PlanRouter:
+    description: Plan Router
+    type: object
+    properties:
+      name:
+        type: string
+      type:
+        type: string
+      config:
+        type: object
+      info:
+        type: object
+        additionalProperties:
+          type: string
+      default:
+        type: boolean
+      dynamic:
+        type: boolean
   ErrorMessage:
     description: Error message.
     type: string
@@ -2461,6 +2900,12 @@ definitions:
         type: string
       description:
         type: string
+      parameters:
+        type: object
+        additionalProperties:
+          type: string
+      pool:
+        type: string
   ServiceInstanceBoundUnit:
     type: object
     properties:
@@ -2510,6 +2955,26 @@ definitions:
         type: array
         items:
           type: string
+      parameters:
+        type: object
+        additionalProperties:
+          type: string
+  ServiceInstanceBind:
+    type: object
+    properties:
+      noRestart:
+        type: boolean
+      parameters:
+        type: object
+        additionalProperties:
+          type: string
+  ServiceInstanceUnbind:
+    type: object
+    properties:
+      noRestart:
+        type: boolean
+      force:
+        type: boolean
   Pool:
     type: object
     properties:
@@ -2698,6 +3163,8 @@ definitions:
         type: string
       contextvalue:
         type: string
+      group:
+        type: string
   PermissionUser:
     description: Permission of an user.
     type: object
@@ -2707,6 +3174,8 @@ definitions:
       contexttype:
         type: string
       contextvalue:
+        type: string
+      group:
         type: string
   User:
     description: User object.
@@ -2719,6 +3188,10 @@ definitions:
         items:
           type: object
           $ref: "#/definitions/RoleUser"
+      groups:
+        type: array
+        items:
+          type: string
       permissions:
         type: array
         items:
@@ -2893,7 +3366,44 @@ definitions:
         type: string
       owner:
         type: string
-  AppCreateData:
+      autoscale:
+        type: array
+        items:
+          type: object
+          $ref: "#/definitions/AutoScaleSpec"
+  UpdateApp:
+    type: object
+    properties:
+      tags:
+        type: array
+        items:
+          type: string
+        description: App tags.
+      plan:
+        type: string
+        description: App plan name.
+      planoverride:
+        type: object
+        $ref: "#/definitions/PlanOverride"
+      pool:
+        type: string
+        description: App pool name.
+      platform:
+        type: string
+        description: App platform.
+      description:
+        type: string
+        description: App description.
+      teamOwner:
+        type: string
+        description: Team that owns the app.
+      noRestart:
+        type: boolean
+        description: Prevent app restart.
+      imageReset:
+        type: boolean
+        description: Reset app image to platform base image.
+  InputApp:
     type: object
     required:
       - name
@@ -2994,10 +3504,27 @@ definitions:
       cpushare:
         type: integer
         minimum: 0
+      cpumilli:
+        type: integer
+        minimum: 0
       default:
         type: boolean
       router:
         type: string
+      override:
+        type: object
+        $ref: "#/definitions/PlanOverride"
+  PlanOverride:
+    description: App plan override.
+    type: object
+    properties:
+      memory:
+        type: integer
+        format: int64
+        x-go-custom-type: "*int64"
+      cpumilli:
+        type: integer
+        x-go-custom-type: "*int"
   Env:
     description: Environment variable.
     type: object
@@ -3063,7 +3590,7 @@ definitions:
         type: object
         additionalProperties:
           type: string
-      addres:
+      address:
         type: string
       type:
         type: string
@@ -3210,6 +3737,14 @@ definitions:
     type: object
     properties:
       token_id:
+        type: string
+      context:
+        type: string
+  AssignGroupArgs:
+    description: Assign role to group arguments.
+    type: object
+    properties:
+      group_name:
         type: string
       context:
         type: string
@@ -3400,3 +3935,48 @@ definitions:
         type: string
       isRoutable:
         type: boolean
+  PoolConstraint:
+    type: object
+    properties:
+      PoolExpr:
+        type: string
+      Field:
+        type: string
+      Values:
+        type: array
+        items:
+          type: string
+      Blacklist:
+        type: boolean
+  PoolConstraintSet:
+    type: object
+    properties:
+      append:
+        type: boolean
+      PoolExpr:
+        type: string
+      Field:
+        type: string
+      Values:
+        type: array
+        items:
+          type: string
+      Blacklist:
+        type: boolean
+  NodeContainer:
+    description: Data sent to set up a node container
+    type: object
+    required:
+      - name
+    properties:
+      name:
+        type: string
+      pool:
+        type: string
+      config:
+        type: object
+        properties:
+          env:
+            type: array
+            items:
+              type: string

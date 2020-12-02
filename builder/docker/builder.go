@@ -6,9 +6,11 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -73,7 +75,7 @@ func limiter() provision.ActionLimiter {
 	return globalLimiter
 }
 
-func (b *dockerBuilder) Build(prov provision.BuilderDeploy, app provision.App, evt *event.Event, opts *builder.BuildOpts) (appTypes.AppVersion, error) {
+func (b *dockerBuilder) Build(ctx context.Context, prov provision.BuilderDeploy, app provision.App, evt *event.Event, opts *builder.BuildOpts) (appTypes.AppVersion, error) {
 	p, ok := prov.(provision.BuilderDeployDockerClient)
 	if !ok {
 		return nil, errors.New("provisioner not supported: doesn't implement docker builder")
@@ -91,30 +93,30 @@ func (b *dockerBuilder) Build(prov provision.BuilderDeploy, app provision.App, e
 		tarFile = dockercommon.AddDeployTarFile(opts.ArchiveFile, opts.ArchiveSize, defaultArchiveName)
 	} else if opts.Rebuild {
 		var rcont *docker.Container
-		tarFile, rcont, err = downloadFromContainer(client, app, archiveFullPath)
+		tarFile, rcont, err = downloadFromContainer(ctx, client, app, archiveFullPath)
 		if err != nil {
 			return nil, err
 		}
 		defer client.RemoveContainer(docker.RemoveContainerOptions{ID: rcont.ID, Force: true})
 	} else if opts.ArchiveURL != "" {
-		tarFile, err = downloadFromURL(opts.ArchiveURL)
+		tarFile, err = downloadFromURL(ctx, opts.ArchiveURL)
 		if err != nil {
 			return nil, err
 		}
 	} else if opts.ImageID != "" {
-		return imageBuild(client, app, opts, evt)
+		return imageBuild(ctx, client, app, opts, evt)
 	} else {
 		return nil, errors.New("no valid files found")
 	}
 	defer tarFile.Close()
-	img, err := b.buildPipeline(p, client, app, tarFile, evt, opts)
+	img, err := b.buildPipeline(ctx, p, client, app, tarFile, evt, opts)
 	if err != nil {
 		return nil, err
 	}
 	return img, nil
 }
 
-func imageBuild(client provision.BuilderDockerClient, app provision.App, opts *builder.BuildOpts, evt *event.Event) (appTypes.AppVersion, error) {
+func imageBuild(ctx context.Context, client provision.BuilderDockerClient, app provision.App, opts *builder.BuildOpts, evt *event.Event) (appTypes.AppVersion, error) {
 	repo, tag := image.SplitImageName(opts.ImageID)
 	imageID := fmt.Sprintf("%s:%s", repo, tag)
 	fmt.Fprintln(evt, "---- Getting process from image ----")
@@ -155,7 +157,7 @@ func imageBuild(client provision.BuilderDockerClient, app provision.App, opts *b
 	if err != nil {
 		return nil, err
 	}
-	newVersion, err := pushImageToRegistry(client, app, imageID, evt, opts.Message)
+	newVersion, err := pushImageToRegistry(ctx, client, app, imageID, evt, opts.Message)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +179,8 @@ func imageBuild(client provision.BuilderDockerClient, app provision.App, opts *b
 	return newVersion, nil
 }
 
-func pushImageToRegistry(client provision.BuilderDockerClient, app provision.App, imageID string, evt *event.Event, message string) (appTypes.AppVersion, error) {
-	newVersion, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+func pushImageToRegistry(ctx context.Context, client provision.BuilderDockerClient, app provision.App, imageID string, evt *event.Event, message string) (appTypes.AppVersion, error) {
+	newVersion, err := servicemanager.AppVersion.NewAppVersion(ctx, appTypes.NewVersionArgs{
 		App:         app,
 		EventID:     evt.UniqueID.Hex(),
 		Description: message,
@@ -313,8 +315,8 @@ func removeContainer(client provision.BuilderDockerClient, containerID string) e
 	return client.RemoveContainer(opts)
 }
 
-func downloadFromContainer(client provision.BuilderDockerClient, app provision.App, filePath string) (io.ReadCloser, *docker.Container, error) {
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app)
+func downloadFromContainer(ctx context.Context, client provision.BuilderDockerClient, app provision.App, filePath string) (io.ReadCloser, *docker.Container, error) {
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, app)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -336,10 +338,18 @@ func downloadFromContainer(client provision.BuilderDockerClient, app provision.A
 	return archiveFile, cont, nil
 }
 
-func downloadFromURL(url string) (io.ReadCloser, error) {
+func downloadFromURL(ctx context.Context, url string) (io.ReadCloser, error) {
 	var out bytes.Buffer
 	client := net.Dial15Full300Client
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if ctx != nil {
+		req = req.WithContext(ctx)
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

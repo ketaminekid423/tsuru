@@ -41,8 +41,7 @@ func (s *S) TestPlatformBuild(c *check.C) {
 		ExtraTags: []string{"latest"},
 		Data:      []byte("dockerfile data"),
 		Output:    &safe.Buffer{},
-		Ctx:       context.Background(),
 	}
-	err := s.b.PlatformBuild(opts)
+	err := s.b.PlatformBuild(context.TODO(), opts)
 	c.Assert(err, check.IsNil, check.Commentf("%+v", err))
 }

@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"context"
 	"sort"
 
 	"github.com/globalsign/mgo/bson"
@@ -14,6 +15,7 @@ import (
 	"github.com/tsuru/tsuru/permission"
 	"github.com/tsuru/tsuru/repository"
 	"github.com/tsuru/tsuru/repository/repositorytest"
+	"github.com/tsuru/tsuru/servicemanager"
 	authTypes "github.com/tsuru/tsuru/types/auth"
 	permTypes "github.com/tsuru/tsuru/types/permission"
 	check "gopkg.in/check.v1"
@@ -111,7 +113,7 @@ func (s *S) TestAddKeyAddsAKeyToTheUser(c *check.C) {
 	key := repository.Key{Name: "some-key", Body: "my-key"}
 	err = u.AddKey(key, false)
 	c.Assert(err, check.IsNil)
-	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(u.Email)
+	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(context.TODO(), u.Email)
 	c.Assert(err, check.IsNil)
 	c.Assert(keys, check.DeepEquals, []repository.Key{key})
 }
@@ -149,7 +151,7 @@ func (s *S) TestAddKeyDuplicatedForce(c *check.C) {
 	newKey := repository.Key{Name: "some-key", Body: "my-new-key"}
 	err = u.AddKey(newKey, true)
 	c.Assert(err, check.IsNil)
-	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(u.Email)
+	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(context.TODO(), u.Email)
 	c.Assert(err, check.IsNil)
 	c.Assert(keys, check.DeepEquals, []repository.Key{newKey})
 }
@@ -172,11 +174,11 @@ func (s *S) TestRemoveKeyRemovesAKeyFromTheUser(c *check.C) {
 	err := u.Create()
 	c.Assert(err, check.IsNil)
 	defer u.Delete()
-	err = repository.Manager().(repository.KeyRepositoryManager).AddKey(u.Email, key)
+	err = repository.Manager().(repository.KeyRepositoryManager).AddKey(context.TODO(), u.Email, key)
 	c.Assert(err, check.IsNil)
 	err = u.RemoveKey(repository.Key{Name: "the-key"})
 	c.Assert(err, check.IsNil)
-	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(u.Email)
+	keys, err := repository.Manager().(repository.KeyRepositoryManager).ListKeys(context.TODO(), u.Email)
 	c.Assert(err, check.IsNil)
 	c.Assert(keys, check.HasLen, 0)
 }
@@ -211,8 +213,8 @@ func (s *S) TestListKeysShouldGetKeysFromTheRepositoryManager(c *check.C) {
 	err := u.Create()
 	c.Assert(err, check.IsNil)
 	defer u.Delete()
-	repository.Manager().(repository.KeyRepositoryManager).AddKey(u.Email, newKeys[0])
-	repository.Manager().(repository.KeyRepositoryManager).AddKey(u.Email, newKeys[1])
+	repository.Manager().(repository.KeyRepositoryManager).AddKey(context.TODO(), u.Email, newKeys[0])
+	repository.Manager().(repository.KeyRepositoryManager).AddKey(context.TODO(), u.Email, newKeys[1])
 	keys, err := u.ListKeys()
 	c.Assert(err, check.IsNil)
 	expected := map[string]string{"key1": "superkey", "key2": "hiperkey"}
@@ -224,7 +226,7 @@ func (s *S) TestListKeysRepositoryManagerFailure(c *check.C) {
 	err := u.Create()
 	c.Assert(err, check.IsNil)
 	defer u.Delete()
-	err = repository.Manager().RemoveUser(u.Email)
+	err = repository.Manager().RemoveUser(context.TODO(), u.Email)
 	c.Assert(err, check.IsNil)
 	keys, err := u.ListKeys()
 	c.Assert(keys, check.HasLen, 0)
@@ -375,14 +377,17 @@ func (s *S) TestRemoveRoleFromAllUsers(c *check.C) {
 }
 
 func (s *S) TestUserPermissions(c *check.C) {
+
 	u := User{Email: "me@tsuru.com", Password: "123"}
 	err := u.Create()
 	c.Assert(err, check.IsNil)
+
 	perms, err := u.Permissions()
 	c.Assert(err, check.IsNil)
 	c.Assert(perms, check.DeepEquals, []permission.Permission{
 		{Scheme: permission.PermUser, Context: permission.Context(permTypes.CtxUser, u.Email)},
 	})
+
 	r1, err := permission.NewRole("r1", "app", "")
 	c.Assert(err, check.IsNil)
 	err = r1.AddPermissions("app.update.env", "app.deploy")
@@ -391,6 +396,9 @@ func (s *S) TestUserPermissions(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = u.AddRole("r1", "myapp2")
 	c.Assert(err, check.IsNil)
+	err = servicemanager.AuthGroup.AddRole("g1", "r1", "myapp3")
+	c.Assert(err, check.IsNil)
+
 	perms, err = u.Permissions()
 	c.Assert(err, check.IsNil)
 	c.Assert(perms, check.DeepEquals, []permission.Permission{
@@ -399,6 +407,38 @@ func (s *S) TestUserPermissions(c *check.C) {
 		{Scheme: permission.PermAppUpdateEnv, Context: permission.Context(permTypes.CtxApp, "myapp")},
 		{Scheme: permission.PermAppDeploy, Context: permission.Context(permTypes.CtxApp, "myapp2")},
 		{Scheme: permission.PermAppUpdateEnv, Context: permission.Context(permTypes.CtxApp, "myapp2")},
+	})
+}
+
+func (s *S) TestUserPermissionsIncludeGroups(c *check.C) {
+	u := User{Email: "me@tsuru.com", Password: "123", Groups: []string{"g1", "g2"}}
+	err := u.Create()
+	c.Assert(err, check.IsNil)
+
+	r1, err := permission.NewRole("r1", "app", "")
+	c.Assert(err, check.IsNil)
+	err = r1.AddPermissions("app.update.env", "app.deploy")
+	c.Assert(err, check.IsNil)
+	err = u.AddRole("r1", "myapp")
+	c.Assert(err, check.IsNil)
+	err = u.AddRole("r1", "myapp2")
+	c.Assert(err, check.IsNil)
+
+	err = servicemanager.AuthGroup.AddRole("g2", "r1", "myapp3")
+	c.Assert(err, check.IsNil)
+	err = servicemanager.AuthGroup.AddRole("g3", "r1", "myapp4")
+	c.Assert(err, check.IsNil)
+
+	perms, err := u.Permissions()
+	c.Assert(err, check.IsNil)
+	c.Assert(perms, check.DeepEquals, []permission.Permission{
+		{Scheme: permission.PermUser, Context: permission.Context(permTypes.CtxUser, u.Email)},
+		{Scheme: permission.PermAppDeploy, Context: permission.Context(permTypes.CtxApp, "myapp")},
+		{Scheme: permission.PermAppUpdateEnv, Context: permission.Context(permTypes.CtxApp, "myapp")},
+		{Scheme: permission.PermAppDeploy, Context: permission.Context(permTypes.CtxApp, "myapp2")},
+		{Scheme: permission.PermAppUpdateEnv, Context: permission.Context(permTypes.CtxApp, "myapp2")},
+		{Scheme: permission.PermAppDeploy, Context: permission.Context(permTypes.CtxApp, "myapp3")},
+		{Scheme: permission.PermAppUpdateEnv, Context: permission.Context(permTypes.CtxApp, "myapp3")},
 	})
 }
 

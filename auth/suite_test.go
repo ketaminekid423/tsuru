@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"context"
 	"testing"
 
 	"github.com/tsuru/config"
@@ -51,10 +52,12 @@ func (s *S) SetUpSuite(c *check.C) {
 	c.Assert(err, check.IsNil)
 	servicemanager.Team, err = TeamService()
 	c.Assert(err, check.IsNil)
+	servicemanager.AuthGroup, err = GroupService()
+	c.Assert(err, check.IsNil)
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.conn.Users().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }
 
@@ -68,7 +71,7 @@ func (s *S) SetUpTest(c *check.C) {
 	u := authTypes.User(*s.user)
 	svc, err := TeamService()
 	c.Assert(err, check.IsNil)
-	err = svc.Create(s.team.Name, nil, &u)
+	err = svc.Create(context.TODO(), s.team.Name, nil, &u)
 	c.Assert(err, check.IsNil)
 	s.server, err = authtest.NewSMTPServer()
 	c.Assert(err, check.IsNil)

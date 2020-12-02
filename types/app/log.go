@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"time"
 
 	"github.com/globalsign/mgo/bson"
@@ -15,8 +16,13 @@ type LogWatcher interface {
 type AppLogService interface {
 	Enqueue(entry *Applog) error
 	Add(appName, message, source, unit string) error
-	List(args ListLogArgs) ([]Applog, error)
-	Watch(args ListLogArgs) (LogWatcher, error)
+	List(ctx context.Context, args ListLogArgs) ([]Applog, error)
+	Watch(ctx context.Context, args ListLogArgs) (LogWatcher, error)
+}
+
+type AppLogServiceProvision interface {
+	Provision(appName string) error
+	CleanUp(appname string) error
 }
 
 type AppLogServiceInstance interface {
@@ -24,9 +30,10 @@ type AppLogServiceInstance interface {
 }
 
 type AppLogStorage interface {
+	AppLogServiceProvision
 	InsertApp(appName string, msgs ...*Applog) error
-	List(args ListLogArgs) ([]Applog, error)
-	Watch(args ListLogArgs) (LogWatcher, error)
+	List(ctx context.Context, args ListLogArgs) ([]Applog, error)
+	Watch(ctx context.Context, args ListLogArgs) (LogWatcher, error)
 }
 
 type ListLogArgs struct {

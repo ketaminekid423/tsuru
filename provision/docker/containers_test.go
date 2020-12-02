@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -31,11 +32,12 @@ import (
 )
 
 func (s *S) TestMoveContainers(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
 	coll := p.Collection()
@@ -49,7 +51,7 @@ func (s *S) TestMoveContainers(c *check.C) {
 		},
 	})
 	defer coll.RemoveAll(bson.M{"appname": appInstance.GetName()})
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		app:         appInstance,
@@ -61,7 +63,7 @@ func (s *S) TestMoveContainers(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	err = p.MoveContainers("localhost", "127.0.0.1", buf)
+	err = p.MoveContainers(context.TODO(), "localhost", "127.0.0.1", buf)
 	c.Assert(err, check.IsNil)
 	containers, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -82,18 +84,19 @@ func (s *S) TestMoveContainers(c *check.C) {
 }
 
 func (s *S) TestMoveContainersUnknownDest(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
 	coll := p.Collection()
 	defer coll.Close()
 	coll.Insert(container.Container{Container: types.Container{ID: "container-id", AppName: appInstance.GetName(), Version: "container-version", Image: "tsuru/python"}})
 	defer coll.RemoveAll(bson.M{"appname": appInstance.GetName()})
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		app:         appInstance,
@@ -105,7 +108,7 @@ func (s *S) TestMoveContainersUnknownDest(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	err = p.MoveContainers("localhost", "unknown", buf)
+	err = p.MoveContainers(context.TODO(), "localhost", "unknown", buf)
 	multiErr := err.(*tsuruErrors.MultiError)
 	c.Assert(multiErr.Len(), check.Equals, 2)
 	parts := strings.Split(buf.String(), "\n")
@@ -122,11 +125,12 @@ func (s *S) TestMoveContainersUnknownDest(c *check.C) {
 }
 
 func (s *S) TestMoveContainer(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
 	coll := p.Collection()
@@ -140,7 +144,7 @@ func (s *S) TestMoveContainer(c *check.C) {
 		},
 	})
 	defer coll.RemoveAll(bson.M{"appname": appInstance.GetName()})
-	addedConts, err := addContainersWithHost(&changeUnitsPipelineArgs{
+	addedConts, err := addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		app:         appInstance,
@@ -161,7 +165,7 @@ func (s *S) TestMoveContainer(c *check.C) {
 		w.WriteHeader(http.StatusOK)
 	})
 	defer rollback()
-	_, err = p.moveContainer(addedConts[0].ID[:6], "127.0.0.1", buf)
+	_, err = p.moveContainer(context.TODO(), addedConts[0].ID[:6], "127.0.0.1", buf)
 	c.Assert(err, check.IsNil)
 	containers, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -178,13 +182,14 @@ func (s *S) TestMoveContainer(c *check.C) {
 }
 
 func (s *S) TestMoveContainerStopped(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	p.Provision(appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	addedConts, err := addContainersWithHost(&changeUnitsPipelineArgs{
+	addedConts, err := addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2, Status: provision.StatusStopped}},
 		app:         appInstance,
@@ -196,7 +201,7 @@ func (s *S) TestMoveContainerStopped(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	_, err = p.moveContainer(addedConts[0].ID[:6], "127.0.0.1", buf)
+	_, err = p.moveContainer(context.TODO(), addedConts[0].ID[:6], "127.0.0.1", buf)
 	c.Assert(err, check.IsNil)
 	containers, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -211,10 +216,10 @@ func (s *S) TestMoveContainerErrorStopped(c *check.C) {
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	p.Provision(appInstance)
+	p.Provision(context.TODO(), appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	addedConts, err := addContainersWithHost(&changeUnitsPipelineArgs{
+	addedConts, err := addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2, Status: provision.StatusStopped}},
 		app:         appInstance,
@@ -228,7 +233,7 @@ func (s *S) TestMoveContainerErrorStopped(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	_, err = p.moveContainer(addedConts[0].ID[:6], "127.0.0.1", buf)
+	_, err = p.moveContainer(context.TODO(), addedConts[0].ID[:6], "127.0.0.1", buf)
 	c.Assert(err, check.IsNil)
 	containers, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -243,10 +248,10 @@ func (s *S) TestMoveContainerErrorStarted(c *check.C) {
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	p.Provision(appInstance)
+	p.Provision(context.TODO(), appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	addedConts, err := addContainersWithHost(&changeUnitsPipelineArgs{
+	addedConts, err := addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 2}},
 		app:         appInstance,
@@ -260,7 +265,7 @@ func (s *S) TestMoveContainerErrorStarted(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	_, err = p.moveContainer(addedConts[0].ID[:6], "127.0.0.1", buf)
+	_, err = p.moveContainer(context.TODO(), addedConts[0].ID[:6], "127.0.0.1", buf)
 	c.Assert(err, check.IsNil)
 	containers, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -272,14 +277,15 @@ func (s *S) TestMoveContainerErrorStarted(c *check.C) {
 }
 
 func (s *S) TestRebalanceContainers(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 5}},
 		app:         appInstance,
@@ -292,7 +298,7 @@ func (s *S) TestRebalanceContainers(c *check.C) {
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	_, err = p.rebalanceContainersByFilter(buf, nil, nil, false)
+	_, err = p.rebalanceContainersByFilter(context.TODO(), buf, nil, nil, false)
 	c.Assert(err, check.IsNil)
 	c1, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -302,6 +308,7 @@ func (s *S) TestRebalanceContainers(c *check.C) {
 }
 
 func (s *S) TestRebalanceContainersSegScheduler(c *check.C) {
+	ctx := context.TODO()
 	otherServer, err := dtesting.NewServer("localhost:0", nil, nil)
 	c.Assert(err, check.IsNil)
 	defer otherServer.Stop()
@@ -317,16 +324,16 @@ func (s *S) TestRebalanceContainersSegScheduler(c *check.C) {
 	)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "pool1"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("pool1", []string{"team1"})
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 5}},
 		app:         appInstance,
@@ -343,7 +350,7 @@ func (s *S) TestRebalanceContainersSegScheduler(c *check.C) {
 	c.Assert(err, check.IsNil)
 	c.Assert(c1, check.HasLen, 5)
 	buf := safe.NewBuffer(nil)
-	_, err = p.rebalanceContainersByFilter(buf, nil, nil, false)
+	_, err = p.rebalanceContainersByFilter(context.TODO(), buf, nil, nil, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.scheduler.ignoredContainers, check.IsNil)
 	c1, err = p.listContainersByHost("localhost")
@@ -354,6 +361,7 @@ func (s *S) TestRebalanceContainersSegScheduler(c *check.C) {
 }
 
 func (s *S) TestRebalanceContainersByHost(c *check.C) {
+	ctx := context.TODO()
 	otherServer, err := dtesting.NewServer("localhost:0", nil, nil)
 	c.Assert(err, check.IsNil)
 	defer otherServer.Stop()
@@ -369,16 +377,16 @@ func (s *S) TestRebalanceContainersByHost(c *check.C) {
 	)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "pool1"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("pool1", []string{"team1"})
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 5}},
 		app:         appInstance,
@@ -400,7 +408,7 @@ func (s *S) TestRebalanceContainersByHost(c *check.C) {
 	err = p.Cluster().Unregister(otherURL)
 	c.Assert(err, check.IsNil)
 	buf := safe.NewBuffer(nil)
-	err = p.rebalanceContainersByHost(net.URLToHost(otherURL), buf)
+	err = p.rebalanceContainersByHost(context.TODO(), net.URLToHost(otherURL), buf)
 	c.Assert(err, check.IsNil)
 	c.Assert(p.scheduler.ignoredContainers, check.IsNil)
 	c2, err = p.listContainersByHost("127.0.0.1")
@@ -465,19 +473,20 @@ func (s *S) TestAppLockerBlockOtherLockers(c *check.C) {
 }
 
 func (s *S) TestRebalanceContainersManyApps(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	appInstance2 := provisiontest.NewFakeApp("otherapp", "python", 0)
-	defer p.Destroy(appInstance2)
-	p.Provision(appInstance2)
+	defer p.Destroy(ctx, appInstance2)
+	p.Provision(ctx, appInstance2)
 	version1, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
 	version2, err := newSuccessfulVersionForApp(p, appInstance2, nil)
 	c.Assert(err, check.IsNil)
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 1}},
 		app:         appInstance,
@@ -485,7 +494,7 @@ func (s *S) TestRebalanceContainersManyApps(c *check.C) {
 		provisioner: p,
 	})
 	c.Assert(err, check.IsNil)
-	_, err = addContainersWithHost(&changeUnitsPipelineArgs{
+	_, err = addContainersWithHost(context.TODO(), &changeUnitsPipelineArgs{
 		toHost:      "localhost",
 		toAdd:       map[string]*containersToAdd{"web": {Quantity: 1}},
 		app:         appInstance2,
@@ -505,7 +514,7 @@ func (s *S) TestRebalanceContainersManyApps(c *check.C) {
 	c1, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
 	c.Assert(c1, check.HasLen, 2)
-	_, err = p.rebalanceContainersByFilter(buf, nil, nil, false)
+	_, err = p.rebalanceContainersByFilter(context.TODO(), buf, nil, nil, false)
 	c.Assert(err, check.IsNil)
 	c1, err = p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -516,11 +525,12 @@ func (s *S) TestRebalanceContainersManyApps(c *check.C) {
 }
 
 func (s *S) TestRebalanceContainersDry(c *check.C) {
+	ctx := context.TODO()
 	p, err := s.startMultipleServersCluster()
 	c.Assert(err, check.IsNil)
 	appInstance := provisiontest.NewFakeApp("myapp", "python", 0)
-	defer p.Destroy(appInstance)
-	p.Provision(appInstance)
+	defer p.Destroy(ctx, appInstance)
+	p.Provision(ctx, appInstance)
 	version, err := newSuccessfulVersionForApp(p, appInstance, nil)
 	c.Assert(err, check.IsNil)
 	args := changeUnitsPipelineArgs{
@@ -537,16 +547,16 @@ func (s *S) TestRebalanceContainersDry(c *check.C) {
 		&setRouterHealthcheck,
 		&updateAppImage,
 	)
-	err = pipeline.Execute(args)
+	err = pipeline.Execute(context.TODO(), args)
 	c.Assert(err, check.IsNil)
 	appStruct := s.newAppFromFake(appInstance)
 	appStruct.Pool = "test-default"
 	err = s.conn.Apps().Insert(appStruct)
 	c.Assert(err, check.IsNil)
 	routers := appInstance.GetRouters()
-	r, err := router.Get(routers[0].Name)
+	r, err := router.Get(context.TODO(), routers[0].Name)
 	c.Assert(err, check.IsNil)
-	beforeRoutes, err := r.Routes(appStruct.Name)
+	beforeRoutes, err := r.Routes(context.TODO(), appStruct.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(beforeRoutes, check.HasLen, 5)
 	var serviceCalled bool
@@ -556,7 +566,7 @@ func (s *S) TestRebalanceContainersDry(c *check.C) {
 	})
 	defer rollback()
 	buf := safe.NewBuffer(nil)
-	_, err = p.rebalanceContainersByFilter(buf, nil, nil, true)
+	_, err = p.rebalanceContainersByFilter(context.TODO(), buf, nil, nil, true)
 	c.Assert(err, check.IsNil)
 	c1, err := p.listContainersByHost("localhost")
 	c.Assert(err, check.IsNil)
@@ -564,7 +574,7 @@ func (s *S) TestRebalanceContainersDry(c *check.C) {
 	c.Assert(err, check.IsNil)
 	c.Assert(c1, check.HasLen, 5)
 	c.Assert(c2, check.HasLen, 0)
-	routes, err := r.Routes(appStruct.Name)
+	routes, err := r.Routes(context.TODO(), appStruct.Name)
 	c.Assert(err, check.IsNil)
 	c.Assert(routes, check.DeepEquals, beforeRoutes)
 	c.Assert(serviceCalled, check.Equals, false)

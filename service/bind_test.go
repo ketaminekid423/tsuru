@@ -5,6 +5,7 @@
 package service_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -67,7 +68,7 @@ func (s *BindSuite) SetUpTest(c *check.C) {
 	c.Assert(err, check.IsNil)
 	s.team = authTypes.Team{Name: "metallica"}
 	opts := pool.AddPoolOptions{Name: "pool1", Default: true, Provisioner: "fake"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	servicemock.SetMockService(&s.mockService)
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -91,7 +92,7 @@ func (s *BindSuite) SetUpTest(c *check.C) {
 }
 
 func (s *BindSuite) TearDownSuite(c *check.C) {
-	s.conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }
 
@@ -108,7 +109,7 @@ func (s *BindSuite) TestBindUnit(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -139,7 +140,7 @@ func (s *BindSuite) TestBindAppFailsWhenEndpointIsDown(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -161,7 +162,7 @@ func (s *BindSuite) TestBindAddsAppToTheServiceInstance(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -191,7 +192,7 @@ func (s *BindSuite) TestBindAppMultiUnits(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(2, "", "", nil)
@@ -236,7 +237,7 @@ func (s *BindSuite) TestBindUnbindAppDuplicatedInstanceNames(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance2)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	evt := createEvt(c)
 	err = instance1.BindApp(a, nil, true, nil, evt, "")
@@ -254,7 +255,7 @@ func (s *BindSuite) TestBindUnbindAppDuplicatedInstanceNames(c *check.C) {
 		Value:  "val2",
 		Public: false,
 	})
-	dbI1, err := service.GetServiceInstance(instance1.ServiceName, instance1.Name)
+	dbI1, err := service.GetServiceInstance(context.TODO(), instance1.ServiceName, instance1.Name)
 	c.Assert(err, check.IsNil)
 	err = dbI1.UnbindApp(service.UnbindAppArgs{
 		App:     a,
@@ -287,7 +288,7 @@ func (s *BindSuite) TestBindReturnConflictIfTheAppIsAlreadyBound(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -309,7 +310,7 @@ func (s *BindSuite) TestBindAppWithNoUnits(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	evt := createEvt(c)
 	err = instance.BindApp(a, nil, true, nil, evt, "")
@@ -338,7 +339,7 @@ func (s *BindSuite) TestUnbindUnit(c *check.C) {
 	err := service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -375,7 +376,7 @@ func (s *BindSuite) TestUnbindMultiUnits(c *check.C) {
 	err := service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(2, "", "", nil)
@@ -430,7 +431,7 @@ func (s *BindSuite) TestUnbindRemovesAppFromServiceInstance(c *check.C) {
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	err = a.AddInstance(bind.AddInstanceArgs{
 		Envs: []bind.ServiceEnvVar{
@@ -462,7 +463,7 @@ func (s *BindSuite) TestUnbindCallsTheUnbindMethodFromAPI(c *check.C) {
 	err := service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -510,7 +511,7 @@ func (s *BindSuite) TestUnbindReturnsPreconditionFailedIfTheAppIsNotBoundToTheIn
 	err = s.conn.ServiceInstances().Insert(instance)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "painkiller", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	evt := createEvt(c)
 	err = instance.UnbindApp(service.UnbindAppArgs{
@@ -522,7 +523,7 @@ func (s *BindSuite) TestUnbindReturnsPreconditionFailedIfTheAppIsNotBoundToTheIn
 }
 
 func newVersionForApp(c *check.C, a appTypes.App) appTypes.AppVersion {
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: a,
 	})
 	c.Assert(err, check.IsNil)

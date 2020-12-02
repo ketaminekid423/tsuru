@@ -24,7 +24,6 @@ import (
 	"github.com/tsuru/tsuru/provision"
 	tsuruv1 "github.com/tsuru/tsuru/provision/kubernetes/pkg/apis/tsuru/v1"
 	"github.com/tsuru/tsuru/provision/nodecontainer"
-	"github.com/tsuru/tsuru/servicemanager"
 	"github.com/tsuru/tsuru/set"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	v1informers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -46,7 +46,6 @@ const (
 	tsuruExtraLabelsMeta      = tsuruLabelPrefix + "extra-labels"
 	tsuruExtraAnnotationsMeta = tsuruLabelPrefix + "extra-annotations"
 	replicaDepRevision        = "deployment.kubernetes.io/revision"
-	kubeKindReplicaSet        = "ReplicaSet"
 	kubeLabelNameMaxLen       = 55
 )
 
@@ -99,6 +98,10 @@ func deployPodNameForApp(a provision.App, version appTypes.AppVersion) string {
 func buildPodNameForApp(a provision.App, version appTypes.AppVersion) string {
 	name := validKubeName(a.GetName())
 	return fmt.Sprintf("%s-v%d-build", name, version.Version())
+}
+
+func hpaNameForApp(a provision.App, process string) string {
+	return appProcessName(a, process, 0, "")
 }
 
 func appProcessName(a provision.App, process string, version int, suffix string) string {
@@ -205,6 +208,20 @@ func allNewPodsRunning(client *ClusterClient, a provision.App, process string, d
 
 func activeReplicaSetForDeployment(client *ClusterClient, dep *appsv1.Deployment) (*appsv1.ReplicaSet, error) {
 	depRevision := dep.Annotations[replicaDepRevision]
+
+	replicaSets, err := getAllReplicasets(client, dep)
+	if err != nil {
+		return nil, err
+	}
+	for _, rs := range replicaSets {
+		if rs.Annotations != nil && rs.Annotations[replicaDepRevision] == depRevision {
+			return &rs, nil
+		}
+	}
+	return nil, k8sErrors.NewNotFound(appsv1.Resource("replicaset"), fmt.Sprintf("deployment: %v, revision: %v", dep.Name, depRevision))
+}
+
+func getAllReplicasets(client kubernetes.Interface, dep *appsv1.Deployment) ([]appsv1.ReplicaSet, error) {
 	sel, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -215,12 +232,8 @@ func activeReplicaSetForDeployment(client *ClusterClient, dep *appsv1.Deployment
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	for i, rs := range replicaSets.Items {
-		if rs.Annotations != nil && rs.Annotations[replicaDepRevision] == depRevision {
-			return &replicaSets.Items[i], nil
-		}
-	}
-	return nil, k8sErrors.NewNotFound(appsv1.Resource("replicaset"), fmt.Sprintf("deployment: %v, revision: %v", dep.Name, depRevision))
+
+	return replicaSets.Items, nil
 }
 
 func podsForReplicaSet(client *ClusterClient, rs *appsv1.ReplicaSet) ([]apiv1.Pod, error) {
@@ -238,8 +251,8 @@ func podsForReplicaSet(client *ClusterClient, rs *appsv1.ReplicaSet) ([]apiv1.Po
 }
 
 type podErrorMessage struct {
-	podName string
 	message string
+	pod     apiv1.Pod
 }
 
 func notReadyPodEvents(client *ClusterClient, ns string, selector map[string]string) ([]podErrorMessage, error) {
@@ -274,7 +287,7 @@ func notReadyPodEventsForPods(client *ClusterClient, pods []apiv1.Pod) ([]podErr
 				} else if cond.Reason != "" {
 					msg = fmt.Sprintf("%s: %s", msg, cond.Reason)
 				}
-				messages = append(messages, podErrorMessage{podName: pod.Name, message: msg})
+				messages = append(messages, podErrorMessage{pod: pod, message: msg})
 			}
 		}
 		for _, contStatus := range pod.Status.ContainerStatuses {
@@ -289,7 +302,7 @@ func notReadyPodEventsForPods(client *ClusterClient, pods []apiv1.Pod) ([]podErr
 			if termState.Message != "" {
 				msg = fmt.Sprintf("%s: %s", msg, termState.Message)
 			}
-			messages = append(messages, podErrorMessage{podName: pod.Name, message: msg})
+			messages = append(messages, podErrorMessage{pod: pod, message: msg})
 		}
 		lastEvt, err := lastEventForPod(client, &pod)
 		if err != nil {
@@ -317,7 +330,7 @@ func notReadyPodEventsForPods(client *ClusterClient, pods []apiv1.Pod) ([]podErr
 			if lastEvt.Message != "" {
 				msg = fmt.Sprintf("%s: %s", msg, lastEvt.Message)
 			}
-			messages = append(messages, podErrorMessage{podName: pod.Name, message: msg})
+			messages = append(messages, podErrorMessage{pod: pod, message: msg})
 		}
 	}
 	return messages, nil
@@ -519,42 +532,29 @@ func cleanupReplicas(client *ClusterClient, dep *appsv1.Deployment) error {
 	return cleanupPods(client, listOpts, dep)
 }
 
-func baseVersionForApp(client *ClusterClient, a provision.App) (appTypes.AppVersion, error) {
-	deps, err := allDeploymentsForApp(client, a)
+func baseVersionForApp(ctx context.Context, client *ClusterClient, a provision.App) (int, error) {
+	depData, err := deploymentsDataForApp(ctx, client, a)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	for _, dep := range deps {
-		labels := labelSetFromMeta(&dep.ObjectMeta)
 
-		if !(labels.IsBase() || labels.AppVersion() == 0) {
-			continue
-		}
-
-		if len(dep.Spec.Template.Spec.Containers) == 0 {
-			continue
-		}
-
-		img := dep.Spec.Template.Spec.Containers[0].Image
-		version, err := servicemanager.AppVersion.VersionByImageOrVersion(a, img)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		return version, nil
+	if depData.base.dep == nil {
+		return 0, nil
 	}
-	return nil, nil
+
+	return depData.base.version, nil
 }
 
-func allDeploymentsForApp(client *ClusterClient, a provision.App) ([]appsv1.Deployment, error) {
+func allDeploymentsForApp(ctx context.Context, client *ClusterClient, a provision.App) ([]appsv1.Deployment, error) {
 	ns, err := client.AppNamespace(a)
 	if err != nil {
 		return nil, err
 	}
-	return allDeploymentsForAppNS(client, ns, a)
+	return allDeploymentsForAppNS(ctx, client, ns, a)
 }
 
-func allDeploymentsForAppNS(client *ClusterClient, ns string, a provision.App) ([]appsv1.Deployment, error) {
-	svcLabels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+func allDeploymentsForAppNS(ctx context.Context, client *ClusterClient, ns string, a provision.App) ([]appsv1.Deployment, error) {
+	svcLabels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: a,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			Prefix: tsuruLabelPrefix,
@@ -573,16 +573,16 @@ func allDeploymentsForAppNS(client *ClusterClient, ns string, a provision.App) (
 	return deps.Items, nil
 }
 
-func allServicesForApp(client *ClusterClient, a provision.App) ([]apiv1.Service, error) {
+func allServicesForApp(ctx context.Context, client *ClusterClient, a provision.App) ([]apiv1.Service, error) {
 	ns, err := client.AppNamespace(a)
 	if err != nil {
 		return nil, err
 	}
-	return allServicesForAppNS(client, ns, a)
+	return allServicesForAppNS(ctx, client, ns, a)
 }
 
-func allServicesForAppNS(client *ClusterClient, ns string, a provision.App) ([]apiv1.Service, error) {
-	svcLabels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+func allServicesForAppNS(ctx context.Context, client *ClusterClient, ns string, a provision.App) ([]apiv1.Service, error) {
+	svcLabels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: a,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			Prefix: tsuruLabelPrefix,
@@ -601,8 +601,8 @@ func allServicesForAppNS(client *ClusterClient, ns string, a provision.App) ([]a
 	return filterTsuruControlledServices(svcs.Items), nil
 }
 
-func allServicesForAppInformer(informer v1informers.ServiceInformer, ns string, a provision.App) ([]apiv1.Service, error) {
-	svcLabels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+func allServicesForAppInformer(ctx context.Context, informer v1informers.ServiceInformer, ns string, a provision.App) ([]apiv1.Service, error) {
+	svcLabels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: a,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			Prefix: tsuruLabelPrefix,
@@ -638,13 +638,13 @@ svcsLoop:
 	return result
 }
 
-func allDeploymentsForAppProcess(client *ClusterClient, a provision.App, process string) ([]appsv1.Deployment, error) {
+func allDeploymentsForAppProcess(ctx context.Context, client *ClusterClient, a provision.App, process string) ([]appsv1.Deployment, error) {
 	ns, err := client.AppNamespace(a)
 	if err != nil {
 		return nil, err
 	}
 
-	svcLabels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	svcLabels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App:     a,
 		Process: process,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
@@ -679,18 +679,19 @@ type deploymentInfo struct {
 	isLegacy   bool
 	isBase     bool
 	isRoutable bool
+	replicas   int
 }
 
-func deploymentsDataForProcess(client *ClusterClient, a provision.App, process string) (groupedDeployments, error) {
-	deps, err := allDeploymentsForAppProcess(client, a, process)
+func deploymentsDataForProcess(ctx context.Context, client *ClusterClient, a provision.App, process string) (groupedDeployments, error) {
+	deps, err := allDeploymentsForAppProcess(ctx, client, a, process)
 	if err != nil {
 		return groupedDeployments{}, err
 	}
 	return groupDeployments(deps), nil
 }
 
-func deploymentsDataForApp(client *ClusterClient, a provision.App) (groupedDeployments, error) {
-	deps, err := allDeploymentsForApp(client, a)
+func deploymentsDataForApp(ctx context.Context, client *ClusterClient, a provision.App) (groupedDeployments, error) {
+	deps, err := allDeploymentsForApp(ctx, client, a)
 	if err != nil {
 		return groupedDeployments{}, err
 	}
@@ -703,7 +704,7 @@ func groupDeployments(deps []appsv1.Deployment) groupedDeployments {
 	}
 	result.count = len(deps)
 	for i, dep := range deps {
-		labels := labelSetFromMeta(&dep.ObjectMeta)
+		labels := labelSetFromMeta(&dep.Spec.Template.ObjectMeta)
 		version := labels.AppVersion()
 		isLegacy := false
 		isBase := labels.IsBase()
@@ -727,6 +728,10 @@ func groupDeployments(deps []appsv1.Deployment) groupedDeployments {
 			isLegacy:   isLegacy,
 			isBase:     isBase,
 			isRoutable: isRoutable,
+			process:    labels.AppProcess(),
+		}
+		if dep.Spec.Replicas != nil {
+			di.replicas = int(*dep.Spec.Replicas)
 		}
 		result.versioned[version] = append(result.versioned[version], di)
 		if isBase {
@@ -736,19 +741,19 @@ func groupDeployments(deps []appsv1.Deployment) groupedDeployments {
 	return result
 }
 
-func deploymentForVersion(client *ClusterClient, a provision.App, process string, version appTypes.AppVersion) (*appsv1.Deployment, error) {
-	groupedDeps, err := deploymentsDataForProcess(client, a, process)
+func deploymentForVersion(ctx context.Context, client *ClusterClient, a provision.App, process string, versionNumber int) (*appsv1.Deployment, error) {
+	groupedDeps, err := deploymentsDataForProcess(ctx, client, a, process)
 	if err != nil {
 		return nil, err
 	}
 
-	depsData := groupedDeps.versioned[version.Version()]
+	depsData := groupedDeps.versioned[versionNumber]
 	if len(depsData) == 0 {
-		return nil, k8sErrors.NewNotFound(appsv1.Resource("deployment"), fmt.Sprintf("app: %v, process: %v, version: %v", a.GetName(), process, version.Version()))
+		return nil, k8sErrors.NewNotFound(appsv1.Resource("deployment"), fmt.Sprintf("app: %v, process: %v, version: %v", a.GetName(), process, versionNumber))
 	}
 
 	if len(depsData) > 1 {
-		return nil, errors.Errorf("two many deployments for same version %d and process %q: %d", version.Version(), process, len(depsData))
+		return nil, errors.Errorf("two many deployments for same version %d and process %q: %d", versionNumber, process, len(depsData))
 	}
 
 	return depsData[0].dep, nil
@@ -768,8 +773,8 @@ func cleanupSingleDeployment(client *ClusterClient, dep *appsv1.Deployment) erro
 	return cleanupReplicas(client, dep)
 }
 
-func cleanupDeployment(client *ClusterClient, a provision.App, process string, version appTypes.AppVersion) error {
-	dep, err := deploymentForVersion(client, a, process, version)
+func cleanupDeployment(ctx context.Context, client *ClusterClient, a provision.App, process string, versionNumber int) error {
+	dep, err := deploymentForVersion(ctx, client, a, process, versionNumber)
 	if err != nil {
 		if k8sErrors.IsNotFound(err) {
 			return nil
@@ -787,13 +792,13 @@ func cleanupDeployment(client *ClusterClient, a provision.App, process string, v
 	return cleanupReplicas(client, dep)
 }
 
-func allServicesForAppProcess(client *ClusterClient, a provision.App, process string) ([]apiv1.Service, error) {
+func allServicesForAppProcess(ctx context.Context, client *ClusterClient, a provision.App, process string) ([]apiv1.Service, error) {
 	ns, err := client.AppNamespace(a)
 	if err != nil {
 		return nil, err
 	}
 
-	svcLabels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	svcLabels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App:     a,
 		Process: process,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
@@ -815,13 +820,13 @@ func allServicesForAppProcess(client *ClusterClient, a provision.App, process st
 	return svcs.Items, nil
 }
 
-func cleanupServices(client *ClusterClient, a provision.App, process string, version appTypes.AppVersion) error {
-	svcs, err := allServicesForAppProcess(client, a, process)
+func cleanupServices(ctx context.Context, client *ClusterClient, a provision.App, process string, versionNumber int) error {
+	svcs, err := allServicesForAppProcess(ctx, client, a, process)
 	if err != nil {
 		return err
 	}
 
-	deps, err := allDeploymentsForAppProcess(client, a, process)
+	deps, err := allDeploymentsForAppProcess(ctx, client, a, process)
 	if err != nil {
 		return err
 	}
@@ -831,7 +836,7 @@ func cleanupServices(client *ClusterClient, a provision.App, process string, ver
 	for _, svc := range svcs {
 		labels := labelSetFromMeta(&svc.ObjectMeta)
 		svcVersion := labels.AppVersion()
-		if svcVersion == version.Version() || !processInUse {
+		if svcVersion == versionNumber || !processInUse {
 			toDelete = append(toDelete, svc)
 		}
 	}
@@ -1083,7 +1088,6 @@ func runPod(ctx context.Context, args runSinglePodArgs) error {
 	if err != nil {
 		return err
 	}
-	labels, annotations := provision.SplitServiceLabelsAnnotations(args.labels)
 	var tty bool
 	if args.stdin == nil {
 		args.cmds = append([]string{"sh", "-c", "cat >/dev/null && exec $0 \"$@\""}, args.cmds...)
@@ -1096,10 +1100,9 @@ func runPod(ctx context.Context, args runSinglePodArgs) error {
 	}
 	pod := &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        args.name,
-			Namespace:   ns,
-			Labels:      labels.ToLabels(),
-			Annotations: annotations.ToLabels(),
+			Name:      args.name,
+			Namespace: ns,
+			Labels:    args.labels.ToLabels(),
 		},
 		Spec: apiv1.PodSpec{
 			ImagePullSecrets:   pullSecrets,

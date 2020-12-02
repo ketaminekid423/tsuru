@@ -6,6 +6,7 @@ package kubernetes
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -31,13 +32,13 @@ type nodeContainerManager struct {
 
 func (m *nodeContainerManager) DeployNodeContainer(config *nodecontainer.NodeContainerConfig, pool string, filter servicecommon.PoolFilter, placementOnly bool) error {
 	if m.app != nil {
-		client, err := clusterForPool(m.app.GetPool())
+		client, err := clusterForPool(context.TODO(), m.app.GetPool())
 		if err != nil {
 			return err
 		}
 		return m.deployNodeContainerForCluster(client, *config, pool, filter, placementOnly)
 	}
-	err := forEachCluster(func(cluster *ClusterClient) error {
+	err := forEachCluster(context.TODO(), func(cluster *ClusterClient) error {
 		return m.deployNodeContainerForCluster(cluster, *config, pool, filter, placementOnly)
 	})
 	if err == provTypes.ErrNoCluster {
@@ -92,6 +93,16 @@ func (m *nodeContainerManager) deployNodeContainerForCluster(client *ClusterClie
 				}},
 			},
 		},
+	}
+	singlePool, err := client.SinglePool()
+	if err != nil {
+		return err
+	}
+	if singlePool {
+		if pool == "" {
+			return nil
+		}
+		affinity = &apiv1.Affinity{}
 	}
 	if oldDs != nil && placementOnly {
 		if reflect.DeepEqual(oldDs.Spec.Template.Spec.Affinity, affinity) {
@@ -176,6 +187,7 @@ func (m *nodeContainerManager) deployNodeContainerForCluster(client *ClusterClie
 	if err != nil {
 		return err
 	}
+	serviceLinks := false
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      dsName,
@@ -197,6 +209,7 @@ func (m *nodeContainerManager) deployNodeContainerForCluster(client *ClusterClie
 					Labels: ls.ToLabels(),
 				},
 				Spec: apiv1.PodSpec{
+					EnableServiceLinks: &serviceLinks,
 					HostPID:            config.HostConfig.PidMode == "host",
 					ImagePullSecrets:   pullSecrets,
 					ServiceAccountName: serviceAccountName,
@@ -251,14 +264,14 @@ func poolBelongsToCluster(cluster *provTypes.Cluster, poolName string) (bool, er
 	if poolName == "" {
 		return true, nil
 	}
-	poolData, err := pool.GetPoolByName(poolName)
+	poolData, err := pool.GetPoolByName(context.TODO(), poolName)
 	if err != nil {
 		if err == pool.ErrPoolNotFound {
 			return false, nil
 		}
 		return false, err
 	}
-	poolCluster, err := servicemanager.Cluster.FindByPool(poolData.Provisioner, poolName)
+	poolCluster, err := servicemanager.Cluster.FindByPool(context.TODO(), poolData.Provisioner, poolName)
 	if err != nil {
 		if err == provTypes.ErrNoCluster {
 			return false, nil

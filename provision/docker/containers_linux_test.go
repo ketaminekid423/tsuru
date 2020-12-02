@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 
 	dtesting "github.com/fsouza/go-dockerclient/testing"
@@ -19,6 +20,7 @@ import (
 )
 
 func (s *S) TestRebalanceContainersManyAppsSegStress(c *check.C) {
+	ctx := context.TODO()
 	var nodes []cluster.Node
 	var nodeHosts []string
 	for i := 0; i < 6; i++ {
@@ -39,7 +41,7 @@ func (s *S) TestRebalanceContainersManyAppsSegStress(c *check.C) {
 	p.cluster, err = cluster.New(p.scheduler, p.storage, "", nodes...)
 	c.Assert(err, check.IsNil)
 	opts := pool.AddPoolOptions{Name: "pool1"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 	err = pool.AddTeamsToPool("pool1", []string{"team1"})
 	c.Assert(err, check.IsNil)
@@ -48,8 +50,8 @@ func (s *S) TestRebalanceContainersManyAppsSegStress(c *check.C) {
 	for i := 0; i < maxContainers; i++ {
 		appName := fmt.Sprintf("myapp-%d", i)
 		appInstance := provisiontest.NewFakeApp(appName, "python", 0)
-		defer p.Destroy(appInstance)
-		p.Provision(appInstance)
+		defer p.Destroy(ctx, appInstance)
+		p.Provision(ctx, appInstance)
 		var version appTypes.AppVersion
 		version, err = newSuccessfulVersionForApp(p, appInstance, nil)
 		c.Assert(err, check.IsNil)
@@ -74,7 +76,7 @@ func (s *S) TestRebalanceContainersManyAppsSegStress(c *check.C) {
 			&setRouterHealthcheck,
 			&updateAppImage,
 		)
-		err = pipeline.Execute(args)
+		err = pipeline.Execute(context.TODO(), args)
 		c.Assert(err, check.IsNil)
 		appStruct := s.newAppFromFake(appInstance)
 		appStruct.TeamOwner = "team1"
@@ -83,7 +85,7 @@ func (s *S) TestRebalanceContainersManyAppsSegStress(c *check.C) {
 		c.Assert(err, check.IsNil)
 	}
 	buf := safe.NewBuffer(nil)
-	cloneProv, err := p.rebalanceContainersByFilter(buf, []string{}, map[string]string{"pool": "pool1"}, false)
+	cloneProv, err := p.rebalanceContainersByFilter(context.TODO(), buf, []string{}, map[string]string{"pool": "pool1"}, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(cloneProv.cluster.Healer, check.Equals, p.cluster.Healer)
 	for i := range nodeHosts {

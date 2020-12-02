@@ -6,6 +6,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"net/url"
 
 	docker "github.com/fsouza/go-dockerclient"
@@ -46,7 +47,7 @@ func (s *S) TestCreateContainerForward(c *check.C) {
 		Value: "val1",
 	})
 	c.Assert(err, check.IsNil)
-	buildImg, err := image.GetBuildImage(app)
+	buildImg, err := image.GetBuildImage(context.TODO(), app)
 	c.Assert(err, check.IsNil)
 	cont := container.Container{Container: types.Container{Name: "myName", AppName: app.GetName(), Type: app.GetPlatform(), Status: "created"}}
 	args := runContainerActionsArgs{
@@ -271,8 +272,8 @@ func (s *S) newContainer(c *check.C, client *docker.Client) *container.Container
 	}}
 	fakeApp := provisiontest.NewFakeApp(container.AppName, "python", 0)
 	version := newVersionForApp(c, client, fakeApp, nil)
-	routertest.FakeRouter.AddBackend(routertest.FakeApp{Name: container.AppName})
-	routertest.FakeRouter.AddRoutes(container.AppName, []*url.URL{container.Address()})
+	routertest.FakeRouter.AddBackend(context.TODO(), routertest.FakeApp{Name: container.AppName})
+	routertest.FakeRouter.AddRoutes(context.TODO(), container.AppName, []*url.URL{container.Address()})
 	ports := map[docker.Port]struct{}{
 		docker.Port(s.port + "/tcp"): {},
 	}
@@ -299,7 +300,7 @@ func newVersionForApp(c *check.C, client *docker.Client, a provision.App, custom
 			},
 		}
 	}
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: a,
 	})
 	c.Assert(err, check.IsNil)

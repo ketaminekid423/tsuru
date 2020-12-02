@@ -22,23 +22,22 @@ type PlatformOptions struct {
 	Input     io.Reader
 	Output    io.Writer
 	Data      []byte
-	Ctx       context.Context
 }
 
 type PlatformService interface {
-	Create(PlatformOptions) error
-	List(bool) ([]Platform, error)
-	FindByName(string) (*Platform, error)
-	Update(PlatformOptions) error
-	Remove(string) error
-	Rollback(PlatformOptions) error
+	Create(context.Context, PlatformOptions) error
+	List(context.Context, bool) ([]Platform, error)
+	FindByName(context.Context, string) (*Platform, error)
+	Update(context.Context, PlatformOptions) error
+	Remove(context.Context, string) error
+	Rollback(context.Context, PlatformOptions) error
 }
 
 type PlatformStorage interface {
-	Insert(Platform) error
-	FindByName(string) (*Platform, error)
-	FindAll() ([]Platform, error)
-	FindEnabled() ([]Platform, error)
-	Update(Platform) error
-	Delete(Platform) error
+	Insert(context.Context, Platform) error
+	FindByName(context.Context, string) (*Platform, error)
+	FindAll(context.Context) ([]Platform, error)
+	FindEnabled(context.Context) ([]Platform, error)
+	Update(context.Context, Platform) error
+	Delete(context.Context, Platform) error
 }

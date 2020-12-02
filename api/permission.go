@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -193,7 +194,7 @@ func deployableApps(u *auth.User, rolesCache map[string]*permission.Role) ([]str
 		return nil, nil
 	}
 	filter := appFilterByContext(contexts, nil)
-	apps, err := app.List(filter)
+	apps, err := app.List(context.TODO(), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +205,7 @@ func deployableApps(u *auth.User, rolesCache map[string]*permission.Role) ([]str
 	return appNames, nil
 }
 
-func syncRepositoryApps(user *auth.User, beforeApps []string, roleCache map[string]*permission.Role) error {
+func syncRepositoryApps(ctx context.Context, user *auth.User, beforeApps []string, roleCache map[string]*permission.Role) error {
 	err := user.Reload()
 	if err != nil {
 		return err
@@ -221,14 +222,14 @@ func syncRepositoryApps(user *auth.User, beforeApps []string, roleCache map[stri
 	for _, a := range beforeApps {
 		var err error
 		if _, ok := afterMap[a]; !ok {
-			err = manager.RevokeAccess(a, user.Email)
+			err = manager.RevokeAccess(ctx, a, user.Email)
 		}
 		if err != nil {
 			log.Errorf("error revoking gandalf access for app %s, user %s: %s", a, user.Email, err)
 		}
 	}
 	for _, a := range afterApps {
-		err := manager.GrantAccess(a, user.Email)
+		err := manager.GrantAccess(ctx, a, user.Email)
 		if err != nil {
 			log.Errorf("error granting gandalf access for app %s, user %s: %s", a, user.Email, err)
 		}
@@ -237,7 +238,7 @@ func syncRepositoryApps(user *auth.User, beforeApps []string, roleCache map[stri
 
 }
 
-func runWithPermSync(users []auth.User, callback func() error) error {
+func runWithPermSync(ctx context.Context, users []auth.User, callback func() error) error {
 	usersMap := make(map[*auth.User][]string)
 	roleCache := make(map[string]*permission.Role)
 	for i := range users {
@@ -254,7 +255,7 @@ func runWithPermSync(users []auth.User, callback func() error) error {
 	}
 	roleCache = make(map[string]*permission.Role)
 	for u, apps := range usersMap {
-		err = syncRepositoryApps(u, apps, roleCache)
+		err = syncRepositoryApps(ctx, u, apps, roleCache)
 		if err != nil {
 			log.Errorf("unable to sync gandalf repositories updating permissions: %s", err)
 		}
@@ -272,6 +273,7 @@ func runWithPermSync(users []auth.User, callback func() error) error {
 //   401: Unauthorized
 //   409: Permission not allowed
 func addPermissions(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdatePermissionAdd) {
 		return permission.ErrUnauthorized
 	}
@@ -295,7 +297,7 @@ func addPermissions(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 	if err != nil {
 		return err
 	}
-	err = runWithPermSync(users, func() error {
+	err = runWithPermSync(ctx, users, func() error {
 		permissions, _ := InputValues(r, "permission")
 		return role.AddPermissions(permissions...)
 	})
@@ -328,6 +330,7 @@ func addPermissions(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 //   401: Unauthorized
 //   404: Not found
 func removePermissions(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdatePermissionRemove) {
 		return permission.ErrUnauthorized
 	}
@@ -358,7 +361,7 @@ func removePermissions(w http.ResponseWriter, r *http.Request, t auth.Token) (er
 	if err != nil {
 		return err
 	}
-	err = runWithPermSync(users, func() error {
+	err = runWithPermSync(ctx, users, func() error {
 		return role.RemovePermissions(permName)
 	})
 	return err
@@ -401,6 +404,7 @@ func canUseRole(t auth.Token, roleName, contextValue string) error {
 //   401: Unauthorized
 //   404: Role not found
 func assignRole(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdateAssign) {
 		return permission.ErrUnauthorized
 	}
@@ -426,7 +430,7 @@ func assignRole(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 	if err != nil {
 		return err
 	}
-	err = runWithPermSync([]auth.User{*user}, func() error {
+	err = runWithPermSync(ctx, []auth.User{*user}, func() error {
 		return user.AddRole(roleName, contextValue)
 	})
 	return err
@@ -441,6 +445,7 @@ func assignRole(w http.ResponseWriter, r *http.Request, t auth.Token) (err error
 //   401: Unauthorized
 //   404: Role not found
 func dissociateRole(w http.ResponseWriter, r *http.Request, t auth.Token) (err error) {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdateDissociate) {
 		return permission.ErrUnauthorized
 	}
@@ -466,7 +471,7 @@ func dissociateRole(w http.ResponseWriter, r *http.Request, t auth.Token) (err e
 	if err != nil {
 		return err
 	}
-	err = runWithPermSync([]auth.User{*user}, func() error {
+	err = runWithPermSync(ctx, []auth.User{*user}, func() error {
 		return user.RemoveRole(roleName, contextValue)
 	})
 	return err
@@ -696,6 +701,7 @@ func roleUpdate(w http.ResponseWriter, r *http.Request, t auth.Token) error {
 //   401: Unauthorized
 //   404: Role or team token not found
 func assignRoleToToken(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdateAssign) {
 		return permission.ErrUnauthorized
 	}
@@ -717,7 +723,7 @@ func assignRoleToToken(w http.ResponseWriter, r *http.Request, t auth.Token) err
 	if err != nil {
 		return err
 	}
-	err = servicemanager.TeamToken.AddRole(tokenID, roleName, contextValue)
+	err = servicemanager.TeamToken.AddRole(ctx, tokenID, roleName, contextValue)
 	if err == authTypes.ErrTeamTokenNotFound {
 		w.WriteHeader(http.StatusNotFound)
 		return nil
@@ -734,6 +740,7 @@ func assignRoleToToken(w http.ResponseWriter, r *http.Request, t auth.Token) err
 //   401: Unauthorized
 //   404: Role or team token not found
 func dissociateRoleFromToken(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	ctx := r.Context()
 	if !permission.Check(t, permission.PermRoleUpdateDissociate) {
 		return permission.ErrUnauthorized
 	}
@@ -755,10 +762,77 @@ func dissociateRoleFromToken(w http.ResponseWriter, r *http.Request, t auth.Toke
 	if err != nil {
 		return err
 	}
-	err = servicemanager.TeamToken.RemoveRole(tokenID, roleName, contextValue)
+	err = servicemanager.TeamToken.RemoveRole(ctx, tokenID, roleName, contextValue)
 	if err == authTypes.ErrTeamTokenNotFound {
 		w.WriteHeader(http.StatusNotFound)
 		return nil
 	}
 	return err
+}
+
+// title: assign role to group
+// path: /roles/{name}/group
+// method: POST
+// consume: application/x-www-form-urlencoded
+// responses:
+//   200: Ok
+//   400: Invalid data
+//   401: Unauthorized
+//   404: Role not found
+func assignRoleToGroup(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	if !permission.Check(t, permission.PermRoleUpdateAssign) {
+		return permission.ErrUnauthorized
+	}
+	groupName := InputValue(r, "group_name")
+	contextValue := InputValue(r, "context")
+	roleName := r.URL.Query().Get(":name")
+	evt, err := event.New(&event.Opts{
+		Target:     event.Target{Type: event.TargetTypeRole, Value: roleName},
+		Kind:       permission.PermRoleUpdateAssign,
+		Owner:      t,
+		CustomData: event.FormToCustomData(InputFields(r)),
+		Allowed:    event.Allowed(permission.PermRoleReadEvents),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { evt.Done(err) }()
+	err = canUseRole(t, roleName, contextValue)
+	if err != nil {
+		return err
+	}
+	return servicemanager.AuthGroup.AddRole(groupName, roleName, contextValue)
+}
+
+// title: dissociate role from group
+// path: /roles/{name}/group/{group_name}
+// method: DELETE
+// responses:
+//   200: Ok
+//   400: Invalid data
+//   401: Unauthorized
+//   404: Role not found
+func dissociateRoleFromGroup(w http.ResponseWriter, r *http.Request, t auth.Token) error {
+	if !permission.Check(t, permission.PermRoleUpdateDissociate) {
+		return permission.ErrUnauthorized
+	}
+	groupName := r.URL.Query().Get(":group_name")
+	contextValue := InputValue(r, "context")
+	roleName := r.URL.Query().Get(":name")
+	evt, err := event.New(&event.Opts{
+		Target:     event.Target{Type: event.TargetTypeRole, Value: roleName},
+		Kind:       permission.PermRoleUpdateDissociate,
+		Owner:      t,
+		CustomData: event.FormToCustomData(InputFields(r)),
+		Allowed:    event.Allowed(permission.PermRoleReadEvents),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { evt.Done(err) }()
+	err = canUseRole(t, roleName, contextValue)
+	if err != nil {
+		return err
+	}
+	return servicemanager.AuthGroup.RemoveRole(groupName, roleName, contextValue)
 }

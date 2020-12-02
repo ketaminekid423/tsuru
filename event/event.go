@@ -111,6 +111,8 @@ var (
 	TargetTypeCluster         = TargetType("cluster")
 	TargetTypeVolume          = TargetType("volume")
 	TargetTypeWebhook         = TargetType("webhook")
+	TargetTypeGC              = TargetType("gc")
+	TargetTypeRouter          = TargetType("router")
 )
 
 const (
@@ -278,6 +280,8 @@ func GetTargetType(t string) (TargetType, error) {
 		return TargetTypeVolume, nil
 	case "webhook":
 		return TargetTypeWebhook, nil
+	case "router":
+		return TargetTypeRouter, nil
 	}
 	return TargetType(""), ErrInvalidTargetType
 }
@@ -845,6 +849,10 @@ func checkThrottling(coll *storage.Collection, target *Target, kind *Kind, allTa
 }
 
 func newEvt(opts *Opts) (evt *Event, err error) {
+	if opts.RetryTimeout == 0 {
+		return newEvtOnce(opts)
+	}
+
 	timeoutCh := time.After(opts.RetryTimeout)
 	for {
 		evt, err := newEvtOnce(opts)
@@ -951,7 +959,7 @@ func newEvtOnce(opts *Opts) (evt *Event, err error) {
 	} else {
 		id.Target = opts.Target
 	}
-	instance, err := servicemanager.InstanceTracker.CurrentInstance()
+	instance, err := servicemanager.InstanceTracker.CurrentInstance(context.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -1263,6 +1271,16 @@ func (e *Event) done(evtErr error, customData interface{}, abort bool) (err erro
 		return coll.RemoveId(e.ID)
 	}
 	if evtErr != nil {
+		if errors.Cause(evtErr) == context.Canceled && !e.CancelInfo.Canceled {
+			now := time.Now().UTC()
+			e.CancelInfo = cancelInfo{
+				Owner:     e.Owner.String(),
+				Reason:    context.Canceled.Error(),
+				AckTime:   now,
+				StartTime: now,
+				Canceled:  true,
+			}
+		}
 		e.Error = evtErr.Error()
 	} else if e.CancelInfo.Canceled {
 		e.Error = "canceled by user request"

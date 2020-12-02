@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	stdcontext "context"
 	"math/rand"
 	"net/http"
@@ -46,7 +47,6 @@ func Test(t *testing.T) { check.TestingT(t) }
 
 type S struct {
 	conn        *db.Storage
-	logConn     *db.LogStorage
 	team        *authTypes.Team
 	user        *auth.User
 	token       auth.Token
@@ -97,6 +97,7 @@ func (s *S) createUserAndTeam(c *check.C) {
 var nativeScheme = auth.ManagedScheme(native.NativeScheme{})
 
 func (s *S) SetUpSuite(c *check.C) {
+	app.TestLogWriterWaitOnClose = true
 	rand.Seed(time.Now().UnixNano())
 	err := config.ReadConfigFile("testdata/config.yaml")
 	c.Assert(err, check.IsNil)
@@ -118,25 +119,25 @@ func (s *S) SetUpTest(c *check.C) {
 	s.conn, err = db.Conn()
 	c.Assert(err, check.IsNil)
 	dbtest.ClearAllCollections(s.conn.Apps().Database)
-	s.logConn, err = db.LogConn()
-	c.Assert(err, check.IsNil)
-	appLogColl := s.logConn.AppLogCollection("myapp")
-	appLogColl.DropCollection()
-	dbtest.ClearAllCollections(appLogColl.Database)
 	s.createUserAndTeam(c)
 	s.provisioner = provisiontest.ProvisionerInstance
 	s.provisioner.Reset()
+	pool.ResetCache()
 	provision.DefaultProvisioner = "fake"
 	app.AuthScheme = nativeScheme
 	s.Pool = "test1"
 	opts := pool.AddPoolOptions{Name: "test1", Default: true}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
-	repository.Manager().CreateUser(s.user.Email)
+	repository.Manager().CreateUser(context.TODO(), s.user.Email)
 	s.setupMocks()
+	servicemanager.App, err = app.AppService()
+	c.Assert(err, check.IsNil)
 	servicemanager.AppLog, err = applog.AppLogService()
 	c.Assert(err, check.IsNil)
 	servicemanager.AppVersion, err = version.AppVersionService()
+	c.Assert(err, check.IsNil)
+	servicemanager.AuthGroup, err = auth.GroupService()
 	c.Assert(err, check.IsNil)
 }
 
@@ -165,10 +166,10 @@ func (s *S) setupMocks() {
 	s.mockService.Plan.OnDefaultPlan = func() (*appTypes.Plan, error) {
 		return &defaultPlan, nil
 	}
-	s.mockService.UserQuota.OnInc = func(email string, q int) error {
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, q int) error {
 		return nil
 	}
-	s.mockService.UserQuota.OnGet = func(email string) (*quota.Quota, error) {
+	s.mockService.UserQuota.OnGet = func(item quota.QuotaItem) (*quota.Quota, error) {
 		return &s.user.Quota, nil
 	}
 }
@@ -181,7 +182,6 @@ func (s *S) TearDownTest(c *check.C) {
 	}
 	s.provisioner.Reset()
 	s.conn.Close()
-	s.logConn.Close()
 	healer.HealerInstance = nil
 	queue.ResetQueue()
 	config.Unset("listen")
@@ -192,11 +192,7 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
-	logConn, err := db.LogConn()
-	c.Assert(err, check.IsNil)
-	defer logConn.Close()
-	logConn.AppLogCollection("myapp").Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func userWithPermission(c *check.C, perm ...permission.Permission) auth.Token {

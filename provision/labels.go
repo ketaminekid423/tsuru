@@ -5,13 +5,13 @@
 package provision
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
-	"github.com/tsuru/tsuru/router"
 	"github.com/tsuru/tsuru/set"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 var (
@@ -27,12 +27,11 @@ var (
 	labelIsHeadlessService = "is-headless-service"
 	labelIsRoutable        = "is-routable"
 
-	labelAppName            = "app-name"
-	labelAppProcess         = "app-process"
-	labelAppProcessReplicas = "app-process-replicas"
-	LabelAppPool            = "app-pool"
-	labelAppPlatform        = "app-platform"
-	labelAppVersion         = "app-version"
+	labelAppName     = "app-name"
+	labelAppProcess  = "app-process"
+	LabelAppPool     = "app-pool"
+	labelAppPlatform = "app-platform"
+	labelAppVersion  = "app-version"
 
 	labelNodeContainerName = "node-container-name"
 	labelNodeContainerPool = "node-container-pool"
@@ -47,9 +46,6 @@ var (
 	labelVolumePlan = "volume-plan"
 	labelVolumeTeam = "volume-team"
 
-	labelRouterName = "router-name"
-	labelRouterType = "router-type"
-
 	labelBuildImage = "build-image"
 	labelRestarts   = "restarts"
 
@@ -58,6 +54,8 @@ var (
 	labelBuilder = "builder"
 
 	labelClusterMetadata = "tsuru.io/cluster"
+
+	labelCustomTagsPrefix = "custom-tag-"
 )
 
 type LabelSet struct {
@@ -77,6 +75,26 @@ func (s *LabelSet) DeepCopy() *LabelSet {
 		newLabels.RawLabels[k] = v
 	}
 	return newLabels
+}
+
+func (s *LabelSet) Merge(override *LabelSet) *LabelSet {
+	if s == nil {
+		return nil
+	}
+	l := s.DeepCopy()
+	if override == nil {
+		return l
+	}
+	for k, v := range override.Labels {
+		l.Labels[k] = v
+	}
+	for k, v := range override.RawLabels {
+		l.RawLabels[k] = v
+	}
+	if override.Prefix != "" {
+		l.Prefix = override.Prefix
+	}
+	return l
 }
 
 func (s *LabelSet) ToLabels() map[string]string {
@@ -127,6 +145,14 @@ func (s *LabelSet) ToVolumeSelector() map[string]string {
 	return withPrefix(subMap(s.Labels, labelVolumeName), s.Prefix)
 }
 
+func (s *LabelSet) ToHPASelector() map[string]string {
+	keys := []string{labelIsTsuru, labelAppName}
+	if s.getLabel(labelAppProcess) != "" {
+		keys = append(keys, labelAppProcess)
+	}
+	return withPrefix(subMap(s.Labels, keys...), s.Prefix)
+}
+
 func (s *LabelSet) AppName() string {
 	return s.getLabel(labelAppName)
 }
@@ -164,10 +190,6 @@ func (s *LabelSet) WithoutVersion() *LabelSet {
 	ns := s.without(labelAppVersion)
 	delete(ns.RawLabels, "version")
 	return ns
-}
-
-func (s *LabelSet) WithoutAppReplicas() *LabelSet {
-	return s.without(labelAppProcessReplicas)
 }
 
 func (s *LabelSet) WithoutRoutable() *LabelSet {
@@ -248,11 +270,6 @@ func (s *LabelSet) NodeExtraData(cluster string) map[string]string {
 		m[labelClusterMetadata] = cluster
 	}
 	return m
-}
-
-func (s *LabelSet) AppReplicas() int {
-	replicas, _ := strconv.Atoi(s.getLabel(labelAppProcessReplicas))
-	return replicas
 }
 
 func (s *LabelSet) Restarts() int {
@@ -369,10 +386,9 @@ func (s *LabelSet) getBoolLabel(k string) bool {
 }
 
 type ServiceLabelsOpts struct {
-	App      App
-	Process  string
-	Replicas int
-	Version  int
+	App     App
+	Process string
+	Version int
 	ServiceLabelExtendedOpts
 }
 
@@ -399,8 +415,8 @@ func ExtendServiceLabels(set *LabelSet, opts ServiceLabelExtendedOpts) {
 	set.Labels[labelBuilder] = opts.Builder
 }
 
-func ServiceLabels(opts ServiceLabelsOpts) (*LabelSet, error) {
-	set, err := ProcessLabels(ProcessLabelsOpts{
+func ServiceLabels(ctx context.Context, opts ServiceLabelsOpts) (*LabelSet, error) {
+	set, err := ProcessLabels(ctx, ProcessLabelsOpts{
 		App:      opts.App,
 		Process:  opts.Process,
 		IsDeploy: opts.IsDeploy,
@@ -408,7 +424,6 @@ func ServiceLabels(opts ServiceLabelsOpts) (*LabelSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	set.Labels[labelAppProcessReplicas] = strconv.Itoa(opts.Replicas)
 	if set.RawLabels == nil {
 		set.RawLabels = make(map[string]string)
 	}
@@ -417,26 +432,6 @@ func ServiceLabels(opts ServiceLabelsOpts) (*LabelSet, error) {
 	}
 	ExtendServiceLabels(set, opts.ServiceLabelExtendedOpts)
 	return set, nil
-}
-
-func SplitServiceLabelsAnnotations(ls *LabelSet) (labels *LabelSet, ann *LabelSet) {
-	labels = &LabelSet{Prefix: ls.Prefix, Labels: map[string]string{}, RawLabels: map[string]string{}}
-	ann = &LabelSet{Prefix: ls.Prefix, Labels: map[string]string{}}
-	annKeys := map[string]struct{}{
-		labelRouterName: {},
-		labelRouterType: {},
-	}
-	for k, v := range ls.RawLabels {
-		labels.RawLabels[k] = v
-	}
-	for k, v := range ls.Labels {
-		if _, ok := annKeys[k]; ok {
-			ann.Labels[k] = v
-		} else {
-			labels.Labels[k] = v
-		}
-	}
-	return labels, ann
 }
 
 type ProcessLabelsOpts struct {
@@ -448,17 +443,8 @@ type ProcessLabelsOpts struct {
 	IsDeploy    bool
 }
 
-func ProcessLabels(opts ProcessLabelsOpts) (*LabelSet, error) {
-	var routerNames, routerTypes []string
-	for _, appRouter := range opts.App.GetRouters() {
-		routerType, _, err := router.Type(appRouter.Name)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		routerNames = append(routerNames, appRouter.Name)
-		routerTypes = append(routerTypes, routerType)
-	}
-	return &LabelSet{
+func ProcessLabels(ctx context.Context, opts ProcessLabelsOpts) (*LabelSet, error) {
+	ls := &LabelSet{
 		Labels: map[string]string{
 			labelIsTsuru:     strconv.FormatBool(true),
 			labelIsStopped:   strconv.FormatBool(false),
@@ -467,13 +453,31 @@ func ProcessLabels(opts ProcessLabelsOpts) (*LabelSet, error) {
 			labelAppProcess:  opts.Process,
 			labelAppPlatform: opts.App.GetPlatform(),
 			LabelAppPool:     opts.App.GetPool(),
-			labelRouterName:  strings.Join(routerNames, ","),
-			labelRouterType:  strings.Join(routerTypes, ","),
 			labelProvisioner: opts.Provisioner,
 			labelBuilder:     opts.Builder,
 		},
 		Prefix: opts.Prefix,
-	}, nil
+	}
+	for _, tag := range opts.App.ListTags() {
+		parts := strings.SplitN(tag, "=", 2)
+		var key, value string
+		if len(parts) > 0 {
+			key = parts[0]
+		}
+		if len(parts) > 1 {
+			value = parts[1]
+		}
+		if key == "" {
+			continue
+		}
+		key = labelCustomTagsPrefix + key
+		if len(validation.IsQualifiedName(key)) > 0 {
+			// Ignoring tags that are not valid identifiers for labels or annotations
+			continue
+		}
+		ls.Labels[key] = value
+	}
+	return ls, nil
 }
 
 type ServiceAccountLabelsOpts struct {

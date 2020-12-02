@@ -122,7 +122,7 @@ func (s *S) TestDeployPodNameForApp(c *check.C) {
 	}
 	for i, tt := range tests {
 		fakeApp := provisiontest.NewFakeApp(tt.name, "python", 0)
-		version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+		version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 			App: fakeApp,
 		})
 		c.Assert(err, check.IsNil)
@@ -394,7 +394,7 @@ func (s *S) TestCleanupPods(c *check.C) {
 		if i == 2 {
 			labels["a"] = "y"
 		}
-		_, err := s.client.CoreV1().Pods(ns).Create(&apiv1.Pod{
+		_, err = s.client.CoreV1().Pods(ns).Create(&apiv1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("pod-%d", i),
 				Namespace: ns,
@@ -432,24 +432,21 @@ func (s *S) TestCleanupDeployment(c *check.C) {
 		},
 	})
 	expectedLabels := map[string]string{
-		"tsuru.io/is-tsuru":             "true",
-		"tsuru.io/is-service":           "true",
-		"tsuru.io/is-build":             "false",
-		"tsuru.io/is-stopped":           "false",
-		"tsuru.io/is-deploy":            "false",
-		"tsuru.io/is-isolated-run":      "false",
-		"tsuru.io/restarts":             "0",
-		"tsuru.io/app-name":             "myapp",
-		"tsuru.io/app-process":          "p1",
-		"tsuru.io/app-process-replicas": "1",
-		"tsuru.io/app-platform":         "plat",
-		"tsuru.io/app-pool":             "test-default",
-		"tsuru.io/app-version":          "1",
-		"tsuru.io/router-type":          "fake",
-		"tsuru.io/router-name":          "fake",
-		"tsuru.io/provisioner":          "kubernetes",
+		"tsuru.io/is-tsuru":        "true",
+		"tsuru.io/is-service":      "true",
+		"tsuru.io/is-build":        "false",
+		"tsuru.io/is-stopped":      "false",
+		"tsuru.io/is-deploy":       "false",
+		"tsuru.io/is-isolated-run": "false",
+		"tsuru.io/restarts":        "0",
+		"tsuru.io/app-name":        "myapp",
+		"tsuru.io/app-process":     "p1",
+		"tsuru.io/app-platform":    "plat",
+		"tsuru.io/app-pool":        "test-default",
+		"tsuru.io/app-version":     "1",
+		"tsuru.io/provisioner":     "kubernetes",
 	}
-	err := s.p.Provision(a)
+	err := s.p.Provision(context.TODO(), a)
 	c.Assert(err, check.IsNil)
 	ns, err := s.client.AppNamespace(a)
 	c.Assert(err, check.IsNil)
@@ -460,6 +457,11 @@ func (s *S) TestCleanupDeployment(c *check.C) {
 			Labels:    expectedLabels,
 		},
 		Spec: appsv1.DeploymentSpec{
+			Template: apiv1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: expectedLabels,
+				},
+			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"tsuru.io/app-name":        "myapp",
@@ -494,7 +496,7 @@ func (s *S) TestCleanupDeployment(c *check.C) {
 		},
 	})
 	c.Assert(err, check.IsNil)
-	err = cleanupDeployment(s.clusterClient, a, "p1", version)
+	err = cleanupDeployment(context.TODO(), s.clusterClient, a, "p1", version.Version())
 	c.Assert(err, check.IsNil)
 	deps, err := s.client.AppsV1().Deployments(ns).List(metav1.ListOptions{})
 	c.Assert(err, check.IsNil)

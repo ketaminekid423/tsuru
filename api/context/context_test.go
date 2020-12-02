@@ -5,11 +5,14 @@
 package context
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"reflect"
 	"testing"
 
+	"github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/app"
 	"github.com/tsuru/tsuru/auth"
@@ -45,9 +48,9 @@ func (s *S) SetUpTest(c *check.C) {
 	dbtest.ClearAllCollections(conn.Apps().Database)
 	repositorytest.Reset()
 	user := &auth.User{Email: "whydidifall@thewho.com", Password: "123456"}
-	_, err = nativeScheme.Create(user)
+	_, err = nativeScheme.Create(context.TODO(), user)
 	c.Assert(err, check.IsNil)
-	s.token, err = nativeScheme.Login(map[string]string{"email": user.Email, "password": "123456"})
+	s.token, err = nativeScheme.Login(context.TODO(), map[string]string{"email": user.Email, "password": "123456"})
 	c.Assert(err, check.IsNil)
 	s.app = &app.App{Name: "app"}
 }
@@ -56,7 +59,7 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func (s *S) TestClear(c *check.C) {
@@ -83,6 +86,9 @@ func (s *S) TestGetAuthToken(c *check.C) {
 func (s *S) TestAddRequestError(c *check.C) {
 	r, err := http.NewRequest("GET", "/", nil)
 	c.Assert(err, check.IsNil)
+	tracer := mocktracer.New()
+	span, ctx := opentracing.StartSpanFromContextWithTracer(r.Context(), tracer, "test")
+	r = r.WithContext(ctx)
 	err1 := errors.New("msg1")
 	err2 := errors.New("msg2")
 	myErr := GetRequestError(r)
@@ -93,6 +99,17 @@ func (s *S) TestAddRequestError(c *check.C) {
 	AddRequestError(r, err2)
 	otherErr := GetRequestError(r)
 	c.Assert(otherErr.Error(), check.Equals, "msg2 Caused by: msg1")
+	mockSpan := span.(*mocktracer.MockSpan)
+	spanLogs := mockSpan.Logs()
+	c.Check(spanLogs, check.HasLen, 2)
+	c.Check(spanLogs[0].Fields[0].Key, check.Equals, "event")
+	c.Check(spanLogs[0].Fields[0].ValueString, check.Equals, "error")
+	c.Check(spanLogs[0].Fields[1].Key, check.Equals, "error.object")
+	c.Check(spanLogs[0].Fields[1].ValueString, check.Equals, "msg1")
+	c.Check(spanLogs[1].Fields[0].Key, check.Equals, "event")
+	c.Check(spanLogs[1].Fields[0].ValueString, check.Equals, "error")
+	c.Check(spanLogs[1].Fields[1].Key, check.Equals, "error.object")
+	c.Check(spanLogs[1].Fields[1].ValueString, check.Equals, "msg2")
 }
 
 func (s *S) TestSetDelayedHandler(c *check.C) {

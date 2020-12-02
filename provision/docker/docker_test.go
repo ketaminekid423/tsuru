@@ -6,6 +6,7 @@ package docker
 
 import (
 	"bytes"
+	"context"
 	"net/url"
 	"sort"
 
@@ -64,7 +65,7 @@ func (s *S) newContainer(opts *newContainerOpts, p *dockerProvisioner) (*contain
 	}
 	fakeApp := provisiontest.NewFakeApp(container.AppName, "python", 0)
 	if imageID == "" {
-		version, err := servicemanager.AppVersion.LatestSuccessfulVersion(fakeApp)
+		version, err := servicemanager.AppVersion.LatestSuccessfulVersion(context.TODO(), fakeApp)
 		if err == appTypes.ErrNoVersionsAvailable {
 			version, err = newSuccessfulVersionForApp(p, fakeApp, customData)
 		}
@@ -86,8 +87,8 @@ func (s *S) newContainer(opts *newContainerOpts, p *dockerProvisioner) (*contain
 		}
 	}
 
-	routertest.FakeRouter.AddBackend(routertest.FakeApp{Name: container.AppName})
-	routertest.FakeRouter.AddRoutes(container.AppName, []*url.URL{container.Address()})
+	routertest.FakeRouter.AddBackend(context.TODO(), routertest.FakeApp{Name: container.AppName})
+	routertest.FakeRouter.AddRoutes(context.TODO(), container.AppName, []*url.URL{container.Address()})
 	ports := map[docker.Port]struct{}{
 		docker.Port(s.port + "/tcp"): {},
 	}
@@ -118,7 +119,7 @@ func (s *S) newContainer(opts *newContainerOpts, p *dockerProvisioner) (*contain
 }
 
 func (s *S) removeTestContainer(c *container.Container) error {
-	routertest.FakeRouter.RemoveBackend(c.AppName)
+	routertest.FakeRouter.RemoveBackend(context.TODO(), c.AppName)
 	return c.Remove(s.p.ClusterClient(), s.p.ActionLimiter())
 }
 
@@ -146,7 +147,7 @@ func newVersionForApp(p *dockerProvisioner, a provision.App, customData map[stri
 			},
 		}
 	}
-	version, err := servicemanager.AppVersion.NewAppVersion(appTypes.NewVersionArgs{
+	version, err := servicemanager.AppVersion.NewAppVersion(context.TODO(), appTypes.NewVersionArgs{
 		App: a,
 	})
 	if err != nil {
@@ -218,11 +219,11 @@ func (s *S) TestStart(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
 	var buf bytes.Buffer
 	cmdData, err := dockercommon.ContainerCmdsDataFromVersion(version)
 	c.Assert(err, check.IsNil)
-	cont, err := s.p.start(&container.Container{Container: types.Container{ProcessName: "web"}}, app, cmdData, version, &buf, "")
+	cont, err := s.p.start(context.TODO(), &container.Container{Container: types.Container{ProcessName: "web"}}, app, cmdData, version, &buf, "")
 	c.Assert(err, check.IsNil)
 	c.Assert(cont.ID, check.Not(check.Equals), "")
 	cont2, err := s.p.GetContainer(cont.ID)
@@ -240,11 +241,11 @@ func (s *S) TestStartStoppedContainer(c *check.C) {
 	c.Assert(err, check.IsNil)
 	err = version.CommitBaseImage()
 	c.Assert(err, check.IsNil)
-	routertest.FakeRouter.AddBackend(app)
+	routertest.FakeRouter.AddBackend(context.TODO(), app)
 	cmdData, err := dockercommon.ContainerCmdsDataFromVersion(version)
 	c.Assert(err, check.IsNil)
 	var buf bytes.Buffer
-	cont, err = s.p.start(cont, app, cmdData, version, &buf, "")
+	cont, err = s.p.start(context.TODO(), cont, app, cmdData, version, &buf, "")
 	c.Assert(err, check.IsNil)
 	c.Assert(cont.ID, check.Not(check.Equals), "")
 	cont2, err := s.p.GetContainer(cont.ID)

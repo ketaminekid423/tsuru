@@ -10,16 +10,23 @@ import (
 	appTypes "github.com/tsuru/tsuru/types/app"
 )
 
+const (
+	promNamespace = "tsuru"
+	promSubsystem = "logs"
+)
+
 func AppLogService() (appTypes.AppLogService, error) {
 	appLogSvc, _ := config.GetString("log:app-log-service")
 	if appLogSvc == "" {
-		appLogSvc = "storage"
+		appLogSvc = "memory-standalone"
 	}
 	var svc appTypes.AppLogService
 	var err error
 	switch appLogSvc {
 	case "storage":
 		svc, err = storageAppLogService()
+	case "memory-standalone":
+		svc, err = memoryAppLogService()
 	case "memory":
 		svc, err = aggregatorAppLogService()
 	default:
@@ -28,6 +35,5 @@ func AppLogService() (appTypes.AppLogService, error) {
 	if err != nil {
 		return nil, err
 	}
-	return svc, nil
-
+	return newProvisionerWrapper(svc), nil
 }

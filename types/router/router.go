@@ -4,7 +4,37 @@
 
 package router
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+
+	"github.com/pkg/errors"
+)
+
+var (
+	ErrDynamicRouterNotFound = errors.New("dynamic router not found")
+)
+
+type DynamicRouter struct {
+	Name   string
+	Type   string
+	Config map[string]interface{}
+}
+
+type DynamicRouterService interface {
+	Get(ctx context.Context, name string) (*DynamicRouter, error)
+	List(context.Context) ([]DynamicRouter, error)
+	Remove(ctx context.Context, name string) error
+	Create(context.Context, DynamicRouter) error
+	Update(context.Context, DynamicRouter) error
+}
+
+type DynamicRouterStorage interface {
+	Save(context.Context, DynamicRouter) error
+	Get(ctx context.Context, name string) (*DynamicRouter, error)
+	List(context.Context) ([]DynamicRouter, error)
+	Remove(ctx context.Context, name string) error
+}
 
 type HealthcheckData struct {
 	Path    string

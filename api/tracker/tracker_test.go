@@ -30,7 +30,7 @@ func (s *S) TearDownSuite(c *check.C) {
 	conn, err := db.Conn()
 	c.Assert(err, check.IsNil)
 	defer conn.Close()
-	conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(conn.Apps().Database)
 }
 
 func (s *S) SetUpTest(c *check.C) {
@@ -44,7 +44,7 @@ func (s *S) Test_InstanceService(c *check.C) {
 	svc, err := InstanceService()
 	c.Assert(err, check.IsNil)
 	svc.(*instanceTracker).Shutdown(context.Background())
-	instances, err := svc.LiveInstances()
+	instances, err := svc.LiveInstances(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(instances, check.HasLen, 1)
 	c.Assert(instances[0].Name, check.Not(check.Equals), "")
@@ -55,7 +55,7 @@ func (s *S) Test_InstanceService_CurrentInstance(c *check.C) {
 	svc, err := InstanceService()
 	c.Assert(err, check.IsNil)
 	svc.(*instanceTracker).Shutdown(context.Background())
-	instance, err := svc.CurrentInstance()
+	instance, err := svc.CurrentInstance(context.TODO())
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.Name, check.Not(check.Equals), "")
 	c.Assert(len(instance.Addresses) > 0, check.Equals, true)

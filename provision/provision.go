@@ -21,6 +21,7 @@ import (
 	"github.com/tsuru/tsuru/event"
 	appTypes "github.com/tsuru/tsuru/types/app"
 	provTypes "github.com/tsuru/tsuru/types/provision"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -37,6 +38,7 @@ var (
 	ErrEmptyApp      = errors.New("no units for this app")
 	ErrNodeNotFound  = errors.New("node not found")
 
+	ErrLogsUnavailable = errors.New("logs from provisioner are unavailable")
 	DefaultProvisioner = defaultDockerProvisioner
 )
 
@@ -227,6 +229,7 @@ type App interface {
 	Envs() map[string]bind.EnvVar
 
 	GetMemory() int64
+	GetMilliCPU() int
 	GetSwap() int64
 	GetCpuShare() int
 
@@ -238,7 +241,7 @@ type App interface {
 
 	GetTeamOwner() string
 
-	SetQuotaInUse(int) error
+	ListTags() []string
 }
 
 type BuilderDockerClient interface {
@@ -278,10 +281,10 @@ type InspectData struct {
 }
 
 type BuilderKubeClient interface {
-	BuildPod(App, *event.Event, io.Reader, appTypes.AppVersion) error
-	BuildImage(name string, images []string, inputStream io.Reader, output io.Writer, ctx context.Context) error
-	ImageTagPushAndInspect(App, *event.Event, string, appTypes.AppVersion) (InspectData, error)
-	DownloadFromContainer(App, *event.Event, string) (io.ReadCloser, error)
+	BuildPod(context.Context, App, *event.Event, io.Reader, appTypes.AppVersion) error
+	BuildImage(ctx context.Context, name string, images []string, inputStream io.Reader, output io.Writer) error
+	ImageTagPushAndInspect(context.Context, App, *event.Event, string, appTypes.AppVersion) (InspectData, error)
+	DownloadFromContainer(context.Context, App, *event.Event, string) (io.ReadCloser, error)
 }
 
 type DeployArgs struct {
@@ -293,7 +296,7 @@ type DeployArgs struct {
 
 // BuilderDeploy is a provisioner that allows deploy builded image.
 type BuilderDeploy interface {
-	Deploy(DeployArgs) (string, error)
+	Deploy(context.Context, DeployArgs) (string, error)
 }
 
 type BuilderDeployDockerClient interface {
@@ -307,8 +310,8 @@ type BuilderDeployKubeClient interface {
 }
 
 type VersionsProvisioner interface {
-	ToggleRoutable(App, appTypes.AppVersion, bool) error
-	DeployedVersions(App) ([]int, error)
+	ToggleRoutable(context.Context, App, appTypes.AppVersion, bool) error
+	DeployedVersions(context.Context, App) ([]int, error)
 }
 
 // Provisioner is the basic interface of this package.
@@ -319,45 +322,45 @@ type Provisioner interface {
 	Named
 
 	// Provision is called when tsuru is creating the app.
-	Provision(App) error
+	Provision(context.Context, App) error
 
 	// Destroy is called when tsuru is destroying the app.
-	Destroy(App) error
+	Destroy(context.Context, App) error
 
 	// AddUnits adds units to an app. The first parameter is the app, the
 	// second is the number of units to be added.
 	//
 	// It returns a slice containing all added units
-	AddUnits(App, uint, string, appTypes.AppVersion, io.Writer) error
+	AddUnits(context.Context, App, uint, string, appTypes.AppVersion, io.Writer) error
 
 	// RemoveUnits "undoes" AddUnits, removing the given number of units
 	// from the app.
-	RemoveUnits(App, uint, string, appTypes.AppVersion, io.Writer) error
+	RemoveUnits(context.Context, App, uint, string, appTypes.AppVersion, io.Writer) error
 
 	// Restart restarts the units of the application, with an optional
 	// string parameter represeting the name of the process to start. When
 	// the process is empty, Restart will restart all units of the
 	// application.
-	Restart(App, string, appTypes.AppVersion, io.Writer) error
+	Restart(context.Context, App, string, appTypes.AppVersion, io.Writer) error
 
 	// Start starts the units of the application, with an optional string
 	// parameter representing the name of the process to start. When the
 	// process is empty, Start will start all units of the application.
-	Start(App, string, appTypes.AppVersion) error
+	Start(context.Context, App, string, appTypes.AppVersion) error
 
 	// Stop stops the units of the application, with an optional string
 	// parameter representing the name of the process to start. When the
 	// process is empty, Stop will stop all units of the application.
-	Stop(App, string, appTypes.AppVersion) error
+	Stop(context.Context, App, string, appTypes.AppVersion) error
 
 	// Units returns information about units by App.
-	Units(...App) ([]Unit, error)
+	Units(context.Context, ...App) ([]Unit, error)
 
 	// RoutableAddresses returns the addresses used to access an application.
-	RoutableAddresses(App) ([]appTypes.RoutableAddresses, error)
+	RoutableAddresses(context.Context, App) ([]appTypes.RoutableAddresses, error)
 
 	// Register a unit after the container has been created or restarted.
-	RegisterUnit(App, string, map[string]interface{}) error
+	RegisterUnit(context.Context, App, string, map[string]interface{}) error
 }
 
 type ExecOptions struct {
@@ -373,7 +376,13 @@ type ExecOptions struct {
 }
 
 type ExecutableProvisioner interface {
-	ExecuteCommand(opts ExecOptions) error
+	ExecuteCommand(ctx context.Context, opts ExecOptions) error
+}
+
+// LogsProvisioner is a provisioner that is self responsible for storage logs.
+type LogsProvisioner interface {
+	ListLogs(ctx context.Context, app appTypes.App, args appTypes.ListLogArgs) ([]appTypes.Applog, error)
+	WatchLogs(ctx context.Context, app appTypes.App, args appTypes.ListLogArgs) (appTypes.LogWatcher, error)
 }
 
 // SleepableProvisioner is a provisioner that allows putting applications to
@@ -382,13 +391,13 @@ type SleepableProvisioner interface {
 	// Sleep puts the units of the application to sleep, with an optional string
 	// parameter representing the name of the process to sleep. When the
 	// process is empty, Sleep will put all units of the application to sleep.
-	Sleep(App, string, appTypes.AppVersion) error
+	Sleep(context.Context, App, string, appTypes.AppVersion) error
 }
 
 // UpdatableProvisioner is a provisioner that stores data about applications
 // and must be notified when they are updated
 type UpdatableProvisioner interface {
-	UpdateApp(old, new App, w io.Writer) error
+	UpdateApp(ctx context.Context, old, new App, w io.Writer) error
 }
 
 // InterAppProvisioner is a provisioner that allows an app to comunicate with each other
@@ -466,25 +475,25 @@ type NodeProvisioner interface {
 	Named
 
 	// ListNodes returns a list of all nodes registered in the provisioner.
-	ListNodes(addressFilter []string) ([]Node, error)
+	ListNodes(ctx context.Context, addressFilter []string) ([]Node, error)
 
 	// ListNodesByFilters returns a list of filtered nodes by filter.
-	ListNodesByFilter(filter *provTypes.NodeFilter) ([]Node, error)
+	ListNodesByFilter(ctx context.Context, filter *provTypes.NodeFilter) ([]Node, error)
 
 	// GetNode retrieves an existing node by its address.
-	GetNode(address string) (Node, error)
+	GetNode(ctx context.Context, address string) (Node, error)
 
 	// AddNode adds a new node in the provisioner.
-	AddNode(AddNodeOptions) error
+	AddNode(context.Context, AddNodeOptions) error
 
 	// RemoveNode removes an existing node.
-	RemoveNode(RemoveNodeOptions) error
+	RemoveNode(context.Context, RemoveNodeOptions) error
 
 	// UpdateNode can be used to enable/disable a node and update its metadata.
-	UpdateNode(UpdateNodeOptions) error
+	UpdateNode(context.Context, UpdateNodeOptions) error
 
 	// NodeForNodeData finds a node matching the received NodeStatusData.
-	NodeForNodeData(NodeStatusData) (Node, error)
+	NodeForNodeData(context.Context, NodeStatusData) (Node, error)
 }
 
 type RebalanceNodesOptions struct {
@@ -497,12 +506,12 @@ type RebalanceNodesOptions struct {
 }
 
 type NodeRebalanceProvisioner interface {
-	RebalanceNodes(RebalanceNodesOptions) (bool, error)
+	RebalanceNodes(context.Context, RebalanceNodesOptions) (bool, error)
 }
 
 type NodeContainerProvisioner interface {
-	UpgradeNodeContainer(name string, pool string, writer io.Writer) error
-	RemoveNodeContainer(name string, pool string, writer io.Writer) error
+	UpgradeNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error
+	RemoveNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error
 }
 
 // UnitFinderProvisioner is a provisioner that allows finding a specific unit
@@ -511,22 +520,53 @@ type NodeContainerProvisioner interface {
 // provisioner.
 type UnitFinderProvisioner interface {
 	// GetAppFromUnitID returns an app from unit id
-	GetAppFromUnitID(string) (App, error)
+	GetAppFromUnitID(context.Context, string) (App, error)
 }
 
 // AppFilterProvisioner is a provisioner that allows filtering apps by the
 // state of its units.
 type AppFilterProvisioner interface {
-	FilterAppsByUnitStatus([]App, []string) ([]App, error)
+	FilterAppsByUnitStatus(context.Context, []App, []string) ([]App, error)
 }
 
 type VolumeProvisioner interface {
-	IsVolumeProvisioned(volumeName, pool string) (bool, error)
-	DeleteVolume(volumeName, pool string) error
+	IsVolumeProvisioned(ctx context.Context, volumeName, pool string) (bool, error)
+	DeleteVolume(ctx context.Context, volumeName, pool string) error
 }
 
 type CleanImageProvisioner interface {
 	CleanImage(appName string, image string) error
+}
+
+type AutoScaleSpec struct {
+	Process    string `json:"process"`
+	MinUnits   uint   `json:"minUnits"`
+	MaxUnits   uint   `json:"maxUnits"`
+	AverageCPU string `json:"averageCPU"`
+	Version    int    `json:"version"`
+}
+
+func (s AutoScaleSpec) Validate(quotaLimit int) error {
+	if s.MinUnits == 0 {
+		return errors.New("minimum units must be greater than 0")
+	}
+	if s.MaxUnits < s.MinUnits {
+		return errors.New("maximum units must be greater than minimum units")
+	}
+	if quotaLimit > 0 && s.MaxUnits > uint(quotaLimit) {
+		return errors.New("maximum units cannot be greater than quota limit")
+	}
+	_, err := resource.ParseQuantity(s.AverageCPU)
+	if err != nil {
+		return errors.Wrap(err, "unable to parse average CPU")
+	}
+	return nil
+}
+
+type AutoScaleProvisioner interface {
+	GetAutoScale(ctx context.Context, a App) ([]AutoScaleSpec, error)
+	SetAutoScale(ctx context.Context, a App, spec AutoScaleSpec) error
+	RemoveAutoScale(ctx context.Context, a App, process string) error
 }
 
 type Node interface {
@@ -699,35 +739,38 @@ func (e *Error) Error() string {
 }
 
 type ErrUnitStartup struct {
-	BadUnits []string
-	Err      error
+	CrashedUnits     []string
+	CrashedUnitsLogs []appTypes.Applog
+	Err              error
 }
 
 func (e ErrUnitStartup) Error() string {
 	return e.Err.Error()
 }
 
-func (e ErrUnitStartup) IsStartupError() bool {
-	return true
+func (e ErrUnitStartup) Cause() error {
+	return e.Err
 }
 
-func (e ErrUnitStartup) Units() []string {
-	return e.BadUnits
-}
-
-func StartupBadUnits(err error) []string {
-	se, ok := errors.Cause(err).(interface {
-		Units() []string
-	})
-	if ok {
-		return se.Units()
+func IsStartupError(err error) (*ErrUnitStartup, bool) {
+	type causer interface {
+		Cause() error
 	}
-	return nil
-}
 
-func IsStartupError(err error) bool {
-	se, ok := errors.Cause(err).(interface {
-		IsStartupError() bool
-	})
-	return ok && se.IsStartupError()
+	for err != nil {
+		if errUnitStartup, ok := err.(ErrUnitStartup); ok {
+			return &errUnitStartup, ok
+		}
+		if errUnitStartup, ok := err.(*ErrUnitStartup); ok {
+			return errUnitStartup, ok
+		}
+
+		cause, ok := err.(causer)
+		if !ok {
+			break
+		}
+		err = cause.Cause()
+	}
+
+	return nil, false
 }

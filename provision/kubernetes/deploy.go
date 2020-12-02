@@ -35,7 +35,6 @@ import (
 	provTypes "github.com/tsuru/tsuru/types/provision"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
-	extensions "k8s.io/api/extensions/v1beta1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -285,7 +284,7 @@ func createPod(ctx context.Context, params createPodParams) error {
 		if len(params.cmds) != 3 {
 			return errors.Errorf("unexpected cmds list: %#v", params.cmds)
 		}
-		pod, err := newDeployAgentPod(params.client, params.sourceImage, params.app, params.podName, deployAgentConfig{
+		pod, err := newDeployAgentPod(ctx, params.client, params.sourceImage, params.app, params.podName, deployAgentConfig{
 			name:              params.mainContainer,
 			image:             kubeConf.DeploySidecarImage,
 			cmd:               fmt.Sprintf("mkdir -p $(dirname %[1]s) && cat >%[1]s && %[2]s", params.inputFile, strings.Join(params.cmds[2:], " ")),
@@ -393,7 +392,7 @@ type hcResult struct {
 
 func probesFromHC(hc *provTypes.TsuruYamlHealthcheck, port int) (hcResult, error) {
 	var result hcResult
-	if hc == nil || hc.Path == "" {
+	if hc == nil || (hc.Path == "" && len(hc.Command) == 0) {
 		return result, nil
 	}
 	if hc.Scheme == "" {
@@ -425,14 +424,19 @@ func probesFromHC(hc *provTypes.TsuruYamlHealthcheck, port int) (hcResult, error
 		FailureThreshold: int32(hc.AllowedFailures),
 		PeriodSeconds:    int32(hc.IntervalSeconds),
 		TimeoutSeconds:   int32(hc.TimeoutSeconds),
-		Handler: apiv1.Handler{
-			HTTPGet: &apiv1.HTTPGetAction{
-				Path:        hc.Path,
-				Port:        intstr.FromInt(port),
-				Scheme:      apiv1.URIScheme(hc.Scheme),
-				HTTPHeaders: headers,
-			},
-		},
+		Handler:          apiv1.Handler{},
+	}
+	if hc.Path != "" {
+		probe.Handler.HTTPGet = &apiv1.HTTPGetAction{
+			Path:        hc.Path,
+			Port:        intstr.FromInt(port),
+			Scheme:      apiv1.URIScheme(hc.Scheme),
+			HTTPHeaders: headers,
+		}
+	} else {
+		probe.Handler.Exec = &apiv1.ExecAction{
+			Command: hc.Command,
+		}
 	}
 	result.readiness = probe
 	if hc.ForceRestart {
@@ -498,63 +502,84 @@ func ensureServiceAccountForApp(client *ClusterClient, a provision.App) error {
 	return ensureServiceAccount(client, serviceAccountNameForApp(a), labels, ns)
 }
 
-func createAppDeployment(client *ClusterClient, depName string, oldDeployment *appsv1.Deployment, a provision.App, process string, version appTypes.AppVersion, replicas int, labels *provision.LabelSet, selector map[string]string) (*appsv1.Deployment, *provision.LabelSet, *provision.LabelSet, error) {
+func createAppDeployment(client *ClusterClient, depName string, oldDeployment *appsv1.Deployment, a provision.App, process string, version appTypes.AppVersion, replicas int, labels *provision.LabelSet, selector map[string]string) (*appsv1.Deployment, *provision.LabelSet, error) {
 	realReplicas := int32(replicas)
 	extra := []string{extraRegisterCmds(a)}
 	cmdData, err := dockercommon.ContainerCmdsDataFromVersion(version)
 	if err != nil {
-		return nil, nil, nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	cmds, _, err := dockercommon.LeanContainerCmdsWithExtra(process, cmdData, a, extra)
 	if err != nil {
-		return nil, nil, nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	tenRevs := int32(10)
 	webProcessName, err := version.WebProcess()
 	if err != nil {
-		return nil, nil, nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	yamlData, err := version.TsuruYamlData()
 	if err != nil {
-		return nil, nil, nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	processPorts, err := getProcessPortsForVersion(version, process)
 	if err != nil {
-		return nil, nil, nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 	var hcData hcResult
 	if process == webProcessName && len(processPorts) > 0 {
 		//TODO: add support to multiple HCs
 		hcData, err = probesFromHC(yamlData.Healthcheck, processPorts[0].TargetPort)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
-	var lifecycle *apiv1.Lifecycle
+
+	sleepSec := client.preStopSleepSeconds(a.GetPool())
+	terminationGracePeriod := int64(30 + sleepSec)
+
+	var lifecycle apiv1.Lifecycle
+	if sleepSec > 0 {
+		lifecycle.PreStop = &apiv1.Handler{
+			Exec: &apiv1.ExecAction{
+				// Allow some time for endpoints controller and kube-proxy to
+				// remove the endpoints for the pods before sending SIGTERM to
+				// app. This should reduce the number of failed connections due
+				// to pods stopping while their endpoints are still active.
+				Command: []string{"sh", "-c", fmt.Sprintf("sleep %d || true", sleepSec)},
+			},
+		}
+	}
+
 	if yamlData.Hooks != nil && len(yamlData.Hooks.Restart.After) > 0 {
 		hookCmds := []string{
 			"sh", "-c",
 			strings.Join(yamlData.Hooks.Restart.After, " && "),
 		}
-		lifecycle = &apiv1.Lifecycle{
-			PostStart: &apiv1.Handler{
-				Exec: &apiv1.ExecAction{
-					Command: hookCmds,
-				},
+		lifecycle.PostStart = &apiv1.Handler{
+			Exec: &apiv1.ExecAction{
+				Command: hookCmds,
 			},
 		}
 	}
 	maxSurge := client.maxSurge(a.GetPool())
 	maxUnavailable := client.maxUnavailable(a.GetPool())
+	singlePool, err := client.SinglePool()
+	if err != nil {
+		return nil, nil, errors.WithMessage(err, "misconfigured cluster single pool value")
+	}
 	nodeSelector := provision.NodeLabels(provision.NodeLabelsOpts{
 		Pool:   a.GetPool(),
 		Prefix: tsuruLabelPrefix,
 	}).ToNodeByPoolSelector()
+	if singlePool {
+		nodeSelector = map[string]string{}
+	}
 	_, uid := dockercommon.UserForContainer()
 	resourceLimits := apiv1.ResourceList{}
 	overcommit, err := client.OvercommitFactor(a.GetPool())
 	if err != nil {
-		return nil, nil, nil, errors.WithMessage(err, "misconfigured cluster overcommit factor")
+		return nil, nil, errors.WithMessage(err, "misconfigured cluster overcommit factor")
 	}
 	resourceRequests := apiv1.ResourceList{}
 	memory := a.GetMemory()
@@ -562,25 +587,37 @@ func createAppDeployment(client *ClusterClient, depName string, oldDeployment *a
 		resourceLimits[apiv1.ResourceMemory] = *resource.NewQuantity(memory, resource.BinarySI)
 		resourceRequests[apiv1.ResourceMemory] = *resource.NewQuantity(memory/overcommit, resource.BinarySI)
 	}
+	cpu := a.GetMilliCPU()
+	if cpu != 0 {
+		resourceLimits[apiv1.ResourceCPU] = *resource.NewMilliQuantity(int64(cpu), resource.DecimalSI)
+		resourceRequests[apiv1.ResourceCPU] = *resource.NewMilliQuantity(int64(cpu)/overcommit, resource.DecimalSI)
+	}
+	ephemeral, err := client.ephemeralStorage(a.GetPool())
+	if err != nil {
+		return nil, nil, err
+	}
+	if ephemeral.Value() > 0 {
+		resourceRequests[apiv1.ResourceEphemeralStorage] = *resource.NewQuantity(0, resource.DecimalSI)
+		resourceLimits[apiv1.ResourceEphemeralStorage] = ephemeral
+	}
 	volumes, mounts, err := createVolumesForApp(client, a)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	ns, err := client.AppNamespace(a)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	deployImage := version.VersionInfo().DeployImage
 	pullSecrets, err := getImagePullSecrets(client, ns, deployImage)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	labels, annotations := provision.SplitServiceLabelsAnnotations(labels)
-	expandedLabels := labels.ToLabels()
-	expandedLabelsNoReplicas := labels.WithoutAppReplicas().ToLabels()
+	depLabels := labels.WithoutVersion().ToLabels()
+	podLabels := labels.ToLabels()
 	baseName := deploymentNameForAppBase(a, process)
-	expandedLabels["app"] = baseName
-	expandedLabelsNoReplicas["app"] = baseName
+	depLabels["app"] = baseName
+	podLabels["app"] = baseName
 	containerPorts := make([]apiv1.ContainerPort, len(processPorts))
 	for i, port := range processPorts {
 		portInt := port.TargetPort
@@ -593,10 +630,9 @@ func createAppDeployment(client *ClusterClient, depName string, oldDeployment *a
 
 	deployment := appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        depName,
-			Namespace:   ns,
-			Labels:      expandedLabels,
-			Annotations: annotations.ToLabels(),
+			Name:      depName,
+			Namespace: ns,
+			Labels:    depLabels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Strategy: appsv1.DeploymentStrategy{
@@ -613,13 +649,13 @@ func createAppDeployment(client *ClusterClient, depName string, oldDeployment *a
 			},
 			Template: apiv1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      expandedLabelsNoReplicas,
-					Annotations: annotations.ToLabels(),
+					Labels: podLabels,
 				},
 				Spec: apiv1.PodSpec{
-					EnableServiceLinks: &serviceLinks,
-					ImagePullSecrets:   pullSecrets,
-					ServiceAccountName: serviceAccountNameForApp(a),
+					TerminationGracePeriodSeconds: &terminationGracePeriod,
+					EnableServiceLinks:            &serviceLinks,
+					ImagePullSecrets:              pullSecrets,
+					ServiceAccountName:            serviceAccountNameForApp(a),
 					SecurityContext: &apiv1.PodSecurityContext{
 						RunAsUser: uid,
 					},
@@ -641,7 +677,7 @@ func createAppDeployment(client *ClusterClient, depName string, oldDeployment *a
 							},
 							VolumeMounts: mounts,
 							Ports:        containerPorts,
-							Lifecycle:    lifecycle,
+							Lifecycle:    &lifecycle,
 						},
 					},
 				},
@@ -654,7 +690,7 @@ func createAppDeployment(client *ClusterClient, depName string, oldDeployment *a
 	} else {
 		newDep, err = client.AppsV1().Deployments(ns).Update(&deployment)
 	}
-	return newDep, labels, annotations, errors.WithStack(err)
+	return newDep, labels, errors.WithStack(err)
 }
 
 func appEnvs(a provision.App, process string, version appTypes.AppVersion, isDeploy bool) []apiv1.EnvVar {
@@ -673,8 +709,8 @@ type serviceManager struct {
 
 var _ servicecommon.ServiceManager = &serviceManager{}
 
-func (m *serviceManager) CleanupServices(a provision.App, deployedVersion appTypes.AppVersion, preserveOldVersions bool) error {
-	deps, err := allDeploymentsForApp(m.client, a)
+func (m *serviceManager) CleanupServices(ctx context.Context, a provision.App, deployedVersion int, preserveOldVersions bool) error {
+	depGroups, err := deploymentsDataForApp(ctx, m.client, a)
 	if err != nil {
 		return err
 	}
@@ -689,23 +725,25 @@ func (m *serviceManager) CleanupServices(a provision.App, deployedVersion appTyp
 	processInUse := map[string]struct{}{}
 	versionInUse := map[processVersionKey]struct{}{}
 	multiErrors := tsuruErrors.NewMultiError()
-	for _, dep := range deps {
-		labels := labelSetFromMeta(&dep.ObjectMeta)
-		toKeep := labels.AppReplicas() > 0 && (preserveOldVersions || labels.AppVersion() == deployedVersion.Version())
+	for _, depsData := range depGroups.versioned {
+		for _, depData := range depsData {
+			toKeep := depData.replicas > 0 && (preserveOldVersions || depData.version == deployedVersion)
 
-		if toKeep {
-			processInUse[labels.AppProcess()] = struct{}{}
-			versionInUse[processVersionKey{process: labels.AppProcess(), version: labels.AppVersion()}] = struct{}{}
-		} else {
-			fmt.Fprintf(m.writer, " ---> Cleaning up deployment %s\n", dep.Name)
-			err = cleanupSingleDeployment(m.client, &dep)
+			if toKeep {
+				processInUse[depData.process] = struct{}{}
+				versionInUse[processVersionKey{process: depData.process, version: depData.version}] = struct{}{}
+				continue
+			}
+
+			fmt.Fprintf(m.writer, " ---> Cleaning up deployment %s\n", depData.dep.Name)
+			err = cleanupSingleDeployment(m.client, depData.dep)
 			if err != nil {
 				multiErrors.Add(err)
 			}
 		}
 	}
 
-	svcs, err := allServicesForApp(m.client, a)
+	svcs, err := allServicesForApp(ctx, m.client, a)
 	if err != nil {
 		multiErrors.Add(err)
 	}
@@ -733,28 +771,30 @@ func (m *serviceManager) CleanupServices(a provision.App, deployedVersion appTyp
 	return multiErrors.ToError()
 }
 
-func (m *serviceManager) RemoveService(a provision.App, process string, version appTypes.AppVersion) error {
+func (m *serviceManager) RemoveService(ctx context.Context, a provision.App, process string, versionNumber int) error {
 	multiErrors := tsuruErrors.NewMultiError()
-	err := cleanupDeployment(m.client, a, process, version)
+	err := cleanupDeployment(ctx, m.client, a, process, versionNumber)
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		multiErrors.Add(err)
 	}
-	err = cleanupServices(m.client, a, process, version)
+	err = cleanupServices(ctx, m.client, a, process, versionNumber)
 	if err != nil {
 		multiErrors.Add(err)
 	}
 	return multiErrors.ToError()
 }
 
-func (m *serviceManager) CurrentLabels(a provision.App, process string, version appTypes.AppVersion) (*provision.LabelSet, error) {
-	dep, err := deploymentForVersion(m.client, a, process, version)
+func (m *serviceManager) CurrentLabels(ctx context.Context, a provision.App, process string, versionNumber int) (*provision.LabelSet, *int32, error) {
+	dep, err := deploymentForVersion(ctx, m.client, a, process, versionNumber)
 	if err != nil {
 		if k8sErrors.IsNotFound(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	return labelSetFromMeta(&dep.ObjectMeta), nil
+	depLabels := labelOnlySetFromMetaPrefix(&dep.ObjectMeta, false)
+	podLabels := labelOnlySetFromMetaPrefix(&dep.Spec.Template.ObjectMeta, false)
+	return depLabels.Merge(podLabels), dep.Spec.Replicas, nil
 }
 
 const deadlineExeceededProgressCond = "ProgressDeadlineExceeded"
@@ -769,18 +809,35 @@ func createDeployTimeoutError(client *ClusterClient, ns string, selector map[str
 		return errors.Errorf("Unknown error deploying application, timeout after %v", timeout)
 	}
 	var msgsStr []string
-	badUnitsSet := make(map[string]struct{})
-	for _, m := range messages {
-		badUnitsSet[m.podName] = struct{}{}
+	var pods []*apiv1.Pod
+
+	crashedUnitsSet := make(map[string]struct{})
+	for i, m := range messages {
+		crashedUnitsSet[m.pod.Name] = struct{}{}
 		msgsStr = append(msgsStr, fmt.Sprintf(" ---> %s", m.message))
+		pods = append(pods, &messages[i].pod)
 	}
-	var badUnits []string
-	for u := range badUnitsSet {
-		badUnits = append(badUnits, u)
+	var crashedUnits []string
+	for u := range crashedUnitsSet {
+		crashedUnits = append(crashedUnits, u)
 	}
+
+	var crashedUnitsLogs []appTypes.Applog
+
+	if client.LogsFromAPIServerEnabled() {
+		crashedUnitsLogs, err = listLogsFromPods(client, ns, pods, appTypes.ListLogArgs{
+			Limit: 10,
+		})
+
+		if err != nil {
+			return errors.Wrap(err, "Could not get logs from crashed units")
+		}
+	}
+
 	return provision.ErrUnitStartup{
-		BadUnits: badUnits,
-		Err:      errors.New(strings.Join(msgsStr, "\n")),
+		CrashedUnits:     crashedUnits,
+		CrashedUnitsLogs: crashedUnitsLogs,
+		Err:              errors.New(strings.Join(msgsStr, "\n")),
 	}
 }
 
@@ -989,7 +1046,7 @@ func (m *serviceManager) DeployService(ctx context.Context, a provision.App, pro
 		Prefix:      tsuruLabelPrefix,
 	})
 
-	depArgs, err := m.baseDeploymentArgs(a, process, labels, version, preserveVersions)
+	depArgs, err := m.baseDeploymentArgs(ctx, a, process, labels, version, preserveVersions)
 	if err != nil {
 		return err
 	}
@@ -1017,7 +1074,7 @@ func (m *serviceManager) DeployService(ctx context.Context, a provision.App, pro
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	newDep, labels, annotations, err := createAppDeployment(m.client, depArgs.name, oldDep, a, process, version, replicas, labels, depArgs.selector)
+	newDep, labels, err := createAppDeployment(m.client, depArgs.name, oldDep, a, process, version, replicas, labels, depArgs.selector)
 	if err != nil {
 		return err
 	}
@@ -1030,15 +1087,18 @@ func (m *serviceManager) DeployService(ctx context.Context, a provision.App, pro
 			oldDep.ResourceVersion = ""
 			fmt.Fprintf(m.writer, "\n**** UPDATING BACK AFTER FAILURE ****\n")
 			_, rollbackErr = m.client.AppsV1().Deployments(ns).Update(oldDep)
-		} else if oldDep == nil && newDep != nil {
+		} else if oldDep == nil {
 			// We have just created the deployment, so we need to remove it
 			fmt.Fprintf(m.writer, "\n**** DELETING CREATED DEPLOYMENT AFTER FAILURE ****\n")
 			rollbackErr = m.client.AppsV1().Deployments(ns).Delete(newDep.Name, &metav1.DeleteOptions{})
 		} else {
 			fmt.Fprintf(m.writer, "\n**** ROLLING BACK AFTER FAILURE ****\n")
-			rollbackErr = m.client.ExtensionsV1beta1().Deployments(ns).Rollback(&extensions.DeploymentRollback{
-				Name: depArgs.name,
-			})
+
+			// This code was copied from kubernetes codebase, in the next update of version of kubectl
+			// we need to move to import this library:
+			// https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/kubectl/pkg/polymorphichelpers/rollback.go#L48
+			rollbacker := &DeploymentRollbacker{c: m.client}
+			rollbackErr = rollbacker.Rollback(m.writer, newDep)
 		}
 		if rollbackErr != nil {
 			fmt.Fprintf(m.writer, "\n**** ERROR DURING ROLLBACK ****\n ---> %s <---\n", rollbackErr)
@@ -1050,10 +1110,16 @@ func (m *serviceManager) DeployService(ctx context.Context, a provision.App, pro
 	}
 
 	fmt.Fprintf(m.writer, "\n---- Ensuring services [%s] ----\n", process)
-	err = m.ensureServices(a, process, labels, annotations)
+	err = m.ensureServices(ctx, a, process, labels, version)
 	if err != nil {
 		return err
 	}
+
+	err = ensureAutoScale(ctx, m.client, a, process)
+	if err != nil {
+		return errors.Wrap(err, "unable to ensure auto scale is configured")
+	}
+
 	return nil
 }
 
@@ -1064,7 +1130,7 @@ type baseDepArgs struct {
 	baseDep  *deploymentInfo
 }
 
-func (m *serviceManager) baseDeploymentArgs(a provision.App, process string, labels *provision.LabelSet, version appTypes.AppVersion, preserveVersions bool) (baseDepArgs, error) {
+func (m *serviceManager) baseDeploymentArgs(ctx context.Context, a provision.App, process string, labels *provision.LabelSet, version appTypes.AppVersion, preserveVersions bool) (baseDepArgs, error) {
 	var result baseDepArgs
 	if !preserveVersions {
 		labels.SetIsRoutable()
@@ -1073,7 +1139,7 @@ func (m *serviceManager) baseDeploymentArgs(a provision.App, process string, lab
 		return result, nil
 	}
 
-	depData, err := deploymentsDataForProcess(m.client, a, process)
+	depData, err := deploymentsDataForProcess(ctx, m.client, a, process)
 	if err != nil {
 		return result, err
 	}
@@ -1123,7 +1189,7 @@ type svcCreateData struct {
 	ports    []apiv1.ServicePort
 }
 
-func (m *serviceManager) ensureServices(a provision.App, process string, labels, annotations *provision.LabelSet) error {
+func (m *serviceManager) ensureServices(ctx context.Context, a provision.App, process string, labels *provision.LabelSet, currentVersion appTypes.AppVersion) error {
 	ns, err := m.client.AppNamespace(a)
 	if err != nil {
 		return err
@@ -1138,19 +1204,17 @@ func (m *serviceManager) ensureServices(a provision.App, process string, labels,
 		policy = apiv1.ServiceExternalTrafficPolicyTypeLocal
 	}
 
-	labels = labels.WithoutAppReplicas()
-
 	routableLabels := labels.WithoutVersion().WithoutIsolated()
 	routableLabels.SetIsRoutable()
 
 	versionLabels := labels.WithoutRoutable()
 
-	depData, err := deploymentsDataForProcess(m.client, a, process)
+	depData, err := deploymentsDataForProcess(ctx, m.client, a, process)
 	if err != nil {
 		return err
 	}
 
-	versions, err := servicemanager.AppVersion.AppVersions(a)
+	versions, err := servicemanager.AppVersion.AppVersions(ctx, a)
 	if err != nil {
 		return err
 	}
@@ -1169,16 +1233,23 @@ func (m *serviceManager) ensureServices(a provision.App, process string, labels,
 
 		vInfo, ok := versionInfoMap[versionNumber]
 		if !ok {
-			return errors.Errorf("no version data found for %v", versionNumber)
+			err = errors.Errorf("unable to ensure service %q, no version data found", serviceNameForApp(a, process, versionNumber))
+			if currentVersion.Version() == versionNumber {
+				return err
+			} else {
+				log.Error(err)
+				continue
+			}
 		}
-		version := servicemanager.AppVersion.AppVersionFromInfo(a, vInfo)
-		svcPorts, err := loadServicePorts(version, process)
+		version := servicemanager.AppVersion.AppVersionFromInfo(ctx, a, vInfo)
+		var svcPorts []apiv1.ServicePort
+		svcPorts, err = loadServicePorts(version, process)
 		if err != nil {
 			return err
 		}
 
 		if len(svcPorts) == 0 {
-			err = cleanupServices(m.client, a, process, version)
+			err = cleanupServices(ctx, m.client, a, process, version.Version())
 			if err != nil {
 				return err
 			}
@@ -1223,10 +1294,9 @@ func (m *serviceManager) ensureServices(a provision.App, process string, labels,
 	for _, svcData := range svcsToCreate {
 		svc := &apiv1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:        svcData.name,
-				Namespace:   ns,
-				Labels:      svcData.labels,
-				Annotations: annotations.ToLabels(),
+				Name:      svcData.name,
+				Namespace: ns,
+				Labels:    svcData.labels,
 			},
 			Spec: apiv1.ServiceSpec{
 				Selector:              svcData.selector,
@@ -1250,14 +1320,14 @@ func (m *serviceManager) ensureServices(a provision.App, process string, labels,
 			return errors.WithStack(err)
 		}
 	}
-	err = m.createHeadlessService(headlessPorts, ns, a, process, routableLabels.WithoutVersion(), annotations)
+	err = m.createHeadlessService(headlessPorts, ns, a, process, routableLabels.WithoutVersion())
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *serviceManager) createHeadlessService(svcPorts []apiv1.ServicePort, ns string, a provision.App, process string, labels, annotations *provision.LabelSet) error {
+func (m *serviceManager) createHeadlessService(svcPorts []apiv1.ServicePort, ns string, a provision.App, process string, labels *provision.LabelSet) error {
 	enabled, err := m.client.headlessEnabled(a.GetPool())
 	if err != nil {
 		return errors.WithStack(err)
@@ -1292,10 +1362,9 @@ func (m *serviceManager) createHeadlessService(svcPorts []apiv1.ServicePort, ns 
 
 	headlessSvc := &apiv1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        svcName,
-			Namespace:   ns,
-			Labels:      expandedLabelsHeadless,
-			Annotations: annotations.ToLabels(),
+			Name:      svcName,
+			Namespace: ns,
+			Labels:    expandedLabelsHeadless,
 		},
 		Spec: apiv1.ServiceSpec{
 			Selector:  labels.ToRoutableSelector(),
@@ -1472,7 +1541,7 @@ type inspectParams struct {
 func runInspectSidecar(ctx context.Context, params inspectParams) error {
 	inspectContainer := "inspect-cont"
 	kubeConf := getKubeConfig()
-	pod, err := newDeployAgentPod(params.client, params.sourceImage, params.app, params.podName, deployAgentConfig{
+	pod, err := newDeployAgentPod(ctx, params.client, params.sourceImage, params.app, params.podName, deployAgentConfig{
 		name:              inspectContainer,
 		image:             kubeConf.DeployInspectImage,
 		cmd:               "cat >/dev/null && /bin/deploy-agent",
@@ -1481,6 +1550,11 @@ func runInspectSidecar(ctx context.Context, params inspectParams) error {
 	})
 	if err != nil {
 		return err
+	}
+	for i, c := range pod.Spec.Containers {
+		if c.Name != inspectContainer {
+			pod.Spec.Containers[i].ImagePullPolicy = apiv1.PullAlways
+		}
 	}
 
 	ns, err := params.client.AppNamespace(params.app)
@@ -1544,7 +1618,7 @@ type deployAgentConfig struct {
 	dockerfileBuild   bool
 }
 
-func newDeployAgentPod(client *ClusterClient, sourceImage string, app provision.App, podName string, conf deployAgentConfig) (apiv1.Pod, error) {
+func newDeployAgentPod(ctx context.Context, client *ClusterClient, sourceImage string, app provision.App, podName string, conf deployAgentConfig) (apiv1.Pod, error) {
 	if len(conf.destinationImages) == 0 {
 		return apiv1.Pod{}, errors.Errorf("no destination images provided")
 	}
@@ -1556,7 +1630,7 @@ func newDeployAgentPod(client *ClusterClient, sourceImage string, app provision.
 	if err != nil {
 		return apiv1.Pod{}, err
 	}
-	labels, err := provision.ServiceLabels(provision.ServiceLabelsOpts{
+	labels, err := provision.ServiceLabels(ctx, provision.ServiceLabelsOpts{
 		App: app,
 		ServiceLabelExtendedOpts: provision.ServiceLabelExtendedOpts{
 			IsBuild:     true,
@@ -1567,16 +1641,23 @@ func newDeployAgentPod(client *ClusterClient, sourceImage string, app provision.
 	if err != nil {
 		return apiv1.Pod{}, err
 	}
-	labels, annotations := provision.SplitServiceLabelsAnnotations(labels)
 	volumes, mounts, err := createVolumesForApp(client, app)
 	if err != nil {
 		return apiv1.Pod{}, err
 	}
+	annotations := provision.LabelSet{Prefix: tsuruLabelPrefix}
 	annotations.SetBuildImage(conf.destinationImages[0])
 	nodeSelector := provision.NodeLabels(provision.NodeLabelsOpts{
 		Pool:   app.GetPool(),
 		Prefix: tsuruLabelPrefix,
 	}).ToNodeByPoolSelector()
+	singlePool, err := client.SinglePool()
+	if err != nil {
+		return apiv1.Pod{}, errors.WithMessage(err, "misconfigured cluster single pool value")
+	}
+	if singlePool {
+		nodeSelector = map[string]string{}
+	}
 	_, uid := dockercommon.UserForContainer()
 	ns, err := client.AppNamespace(app)
 	if err != nil {
@@ -1640,7 +1721,7 @@ func newDeployAgentImageBuildPod(client *ClusterClient, sourceImage string, podN
 		Prefix:      tsuruLabelPrefix,
 		Provisioner: provisionerName,
 	})
-	labels, annotations := provision.SplitServiceLabelsAnnotations(labels)
+	annotations := provision.LabelSet{Prefix: tsuruLabelPrefix}
 	annotations.SetBuildImage(conf.destinationImages[0])
 	nodePoolLabelKey := tsuruLabelPrefix + provision.LabelNodePool
 	selectors := []apiv1.NodeSelectorRequirement{
@@ -1654,6 +1735,13 @@ func newDeployAgentImageBuildPod(client *ClusterClient, sourceImage string, podN
 				}},
 			},
 		},
+	}
+	singlePool, err := client.SinglePool()
+	if err != nil {
+		return apiv1.Pod{}, errors.WithMessage(err, "misconfigured cluster single pool value")
+	}
+	if singlePool {
+		affinity = &apiv1.Affinity{}
 	}
 	_, uid := dockercommon.UserForContainer()
 	ns := client.Namespace()

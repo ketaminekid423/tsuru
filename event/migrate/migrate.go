@@ -5,6 +5,7 @@
 package migrate
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,7 @@ func MigrateRCEvents() error {
 }
 
 func setAllowed(evt *event.Event) (err error) {
+	ctx := context.TODO()
 	defer func() {
 		if err != nil {
 			fmt.Printf("setting global context to evt %q: %s\n", evt.String(), err)
@@ -31,7 +33,7 @@ func setAllowed(evt *event.Event) (err error) {
 	switch evt.Target.Type {
 	case event.TargetTypeApp:
 		var a *app.App
-		a, err = app.GetByName(evt.Target.Value)
+		a, err = app.GetByName(ctx, evt.Target.Value)
 		if err != nil {
 			evt.Allowed = event.Allowed(permission.PermAppReadEvents)
 			if evt.Cancelable {
@@ -50,7 +52,7 @@ func setAllowed(evt *event.Event) (err error) {
 	case event.TargetTypeTeam:
 		evt.Allowed = event.Allowed(permission.PermTeamReadEvents, permission.Context(permTypes.CtxTeam, evt.Target.Value))
 	case event.TargetTypeService:
-		s, errGet := service.Get(evt.Target.Value)
+		s, errGet := service.Get(ctx, evt.Target.Value)
 		if errGet != nil {
 			evt.Allowed = event.Allowed(permission.PermServiceReadEvents)
 			return errGet
@@ -67,7 +69,7 @@ func setAllowed(evt *event.Event) (err error) {
 			return nil
 		}
 		var si *service.ServiceInstance
-		si, err = service.GetServiceInstance(v[0], v[1])
+		si, err = service.GetServiceInstance(ctx, v[0], v[1])
 		if err != nil {
 			evt.Allowed = event.Allowed(permission.PermServiceInstanceReadEvents)
 			return err
@@ -93,10 +95,10 @@ func setAllowed(evt *event.Event) (err error) {
 		for _, p := range provisioners {
 			if finderProv, ok := p.(provision.UnitFinderProvisioner); ok {
 				var provApp provision.App
-				provApp, err = finderProv.GetAppFromUnitID(evt.Target.Value)
+				provApp, err = finderProv.GetAppFromUnitID(context.TODO(), evt.Target.Value)
 				_, isNotFound := err.(*provision.UnitNotFoundError)
 				if err == nil || !isNotFound {
-					a, err = app.GetByName(provApp.GetName())
+					a, err = app.GetByName(context.TODO(), provApp.GetName())
 					if err == nil {
 						break
 					}
@@ -122,7 +124,7 @@ func setAllowed(evt *event.Event) (err error) {
 		for _, p := range provisioners {
 			if nodeProvisioner, ok := p.(provision.NodeProvisioner); ok {
 				var nodes []provision.Node
-				nodes, err = nodeProvisioner.ListNodes([]string{evt.Target.Value})
+				nodes, err = nodeProvisioner.ListNodes(context.TODO(), []string{evt.Target.Value})
 				if err != nil {
 					return err
 				}

@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -23,10 +24,8 @@ import (
 	"github.com/tsuru/tsuru/action"
 	"github.com/tsuru/tsuru/api/shutdown"
 	"github.com/tsuru/tsuru/app"
-	"github.com/tsuru/tsuru/app/image/gc"
 	"github.com/tsuru/tsuru/db"
 	"github.com/tsuru/tsuru/db/storage"
-	tsuruErrors "github.com/tsuru/tsuru/errors"
 	"github.com/tsuru/tsuru/event"
 	tsuruHealer "github.com/tsuru/tsuru/healer"
 	"github.com/tsuru/tsuru/log"
@@ -100,7 +99,7 @@ type hookHealer struct {
 }
 
 func (h hookHealer) HandleError(node *cluster.Node) time.Duration {
-	return tsuruHealer.HealerInstance.HandleError(&clusterNodeWrapper{Node: node, prov: h.p})
+	return tsuruHealer.HealerInstance.HandleError(context.TODO(), &clusterNodeWrapper{Node: node, prov: h.p})
 }
 
 func (p *dockerProvisioner) initDockerCluster() error {
@@ -278,11 +277,11 @@ func (p *dockerProvisioner) Initialize() error {
 	return p.initDockerCluster()
 }
 
-func (p *dockerProvisioner) Provision(app provision.App) error {
+func (p *dockerProvisioner) Provision(ctx context.Context, app provision.App) error {
 	return nil
 }
 
-func (p *dockerProvisioner) Restart(a provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
+func (p *dockerProvisioner) Restart(ctx context.Context, a provision.App, process string, version appTypes.AppVersion, w io.Writer) error {
 	containers, err := p.listContainersByProcess(a.GetName(), process)
 	if err != nil {
 		return err
@@ -298,11 +297,11 @@ func (p *dockerProvisioner) Restart(a provision.App, process string, version app
 		toAdd[c.ProcessName].Quantity++
 		toAdd[c.ProcessName].Status = provision.StatusStarted
 	}
-	_, err = p.runReplaceUnitsPipeline(w, a, toAdd, containers, version)
+	_, err = p.runReplaceUnitsPipeline(ctx, w, a, toAdd, containers, version)
 	return err
 }
 
-func (p *dockerProvisioner) Start(app provision.App, process string, _ appTypes.AppVersion) error {
+func (p *dockerProvisioner) Start(ctx context.Context, app provision.App, process string, _ appTypes.AppVersion) error {
 	containers, err := p.listContainersByProcess(app.GetName(), process)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Got error while getting app containers: %s", err))
@@ -325,7 +324,7 @@ func (p *dockerProvisioner) Start(app provision.App, process string, _ appTypes.
 	return err
 }
 
-func (p *dockerProvisioner) Stop(app provision.App, process string, _ appTypes.AppVersion) error {
+func (p *dockerProvisioner) Stop(ctx context.Context, app provision.App, process string, _ appTypes.AppVersion) error {
 	containers, err := p.listContainersByProcess(app.GetName(), process)
 	if err != nil {
 		log.Errorf("Got error while getting app containers: %s", err)
@@ -340,7 +339,7 @@ func (p *dockerProvisioner) Stop(app provision.App, process string, _ appTypes.A
 	}, nil, true)
 }
 
-func (p *dockerProvisioner) Sleep(app provision.App, process string, _ appTypes.AppVersion) error {
+func (p *dockerProvisioner) Sleep(ctx context.Context, app provision.App, process string, _ appTypes.AppVersion) error {
 	containers, err := p.listContainersByProcess(app.GetName(), process)
 	if err != nil {
 		log.Errorf("Got error while getting app containers: %s", err)
@@ -355,38 +354,30 @@ func (p *dockerProvisioner) Sleep(app provision.App, process string, _ appTypes.
 	}, nil, true)
 }
 
-func (p *dockerProvisioner) Deploy(args provision.DeployArgs) (string, error) {
+func (p *dockerProvisioner) Deploy(ctx context.Context, args provision.DeployArgs) (string, error) {
 	if args.PreserveVersions {
 		return "", errors.New("docker provisioner does not support multiple versions")
 	}
 	if args.Version.VersionInfo().DeployImage != "" {
-		err := p.deploy(args.App, args.Version, args.Event)
+		err := p.deploy(ctx, args.App, args.Version, args.Event)
 		if err != nil {
 			return "", err
 		}
 		return args.Version.VersionInfo().DeployImage, nil
 	}
 	cmds := dockercommon.DeployCmds(args.App)
-	imageID, err := p.deployPipeline(args.App, args.Version, cmds, args.Event)
+	imageID, err := p.deployPipeline(ctx, args.App, args.Version, cmds, args.Event)
 	if err != nil {
 		return "", err
 	}
-	err = p.deployAndClean(args.App, args.Version, args.Event)
+	err = p.deploy(ctx, args.App, args.Version, args.Event)
 	if err != nil {
 		return "", err
 	}
 	return imageID, nil
 }
 
-func (p *dockerProvisioner) deployAndClean(a provision.App, version appTypes.AppVersion, evt *event.Event) error {
-	err := p.deploy(a, version, evt)
-	if err != nil {
-		gc.CleanImage(a.GetName(), version.VersionInfo(), true)
-	}
-	return err
-}
-
-func (p *dockerProvisioner) deploy(a provision.App, version appTypes.AppVersion, evt *event.Event) error {
+func (p *dockerProvisioner) deploy(ctx context.Context, a provision.App, version appTypes.AppVersion, evt *event.Event) error {
 	if err := checkCanceled(evt); err != nil {
 		return err
 	}
@@ -408,36 +399,15 @@ func (p *dockerProvisioner) deploy(a provision.App, version appTypes.AppVersion,
 			}
 			toAdd[processName].Quantity++
 		}
-		if err = setQuota(a, toAdd); err != nil {
-			return err
-		}
-		_, err = p.runCreateUnitsPipeline(evt, a, toAdd, version)
+		_, err = p.runCreateUnitsPipeline(ctx, evt, a, toAdd, version)
 	} else {
 		toAdd := getContainersToAdd(processes, containers)
-		if err = setQuota(a, toAdd); err != nil {
-			return err
-		}
-		_, err = p.runReplaceUnitsPipeline(evt, a, toAdd, containers, version)
+		_, err = p.runReplaceUnitsPipeline(ctx, evt, a, toAdd, containers, version)
 	}
 	if err != nil {
 		err = provision.ErrUnitStartup{Err: err}
 	}
 	return err
-}
-
-func setQuota(app provision.App, toAdd map[string]*containersToAdd) error {
-	var total int
-	for _, ct := range toAdd {
-		total += ct.Quantity
-	}
-	err := app.SetQuotaInUse(total)
-	if err != nil {
-		return &tsuruErrors.CompositeError{
-			Base:    err,
-			Message: "Cannot start application units",
-		}
-	}
-	return nil
 }
 
 func getContainersToAdd(processes map[string][]string, oldContainers []container.Container) map[string]*containersToAdd {
@@ -465,7 +435,7 @@ func getContainersToAdd(processes map[string][]string, oldContainers []container
 	return processMap
 }
 
-func (p *dockerProvisioner) Destroy(app provision.App) error {
+func (p *dockerProvisioner) Destroy(ctx context.Context, app provision.App) error {
 	containers, err := p.listContainersByApp(app.GetName())
 	if err != nil {
 		log.Errorf("Failed to list app containers: %s", err)
@@ -483,7 +453,7 @@ func (p *dockerProvisioner) Destroy(app provision.App) error {
 		&provisionRemoveOldUnits,
 		&provisionUnbindOldUnits,
 	)
-	return pipeline.Execute(args)
+	return pipeline.Execute(ctx, args)
 }
 
 func (p *dockerProvisioner) runRestartAfterHooks(cont *container.Container, yamlData provTypes.TsuruYamlData, w io.Writer) error {
@@ -500,7 +470,7 @@ func (p *dockerProvisioner) runRestartAfterHooks(cont *container.Container, yaml
 	return nil
 }
 
-func addContainersWithHost(args *changeUnitsPipelineArgs) ([]container.Container, error) {
+func addContainersWithHost(ctx context.Context, args *changeUnitsPipelineArgs) ([]container.Container, error) {
 	a := args.app
 	w := args.writer
 	var units int
@@ -547,7 +517,7 @@ func addContainersWithHost(args *changeUnitsPipelineArgs) ([]container.Container
 		m                 sync.Mutex
 	)
 	err = runInContainers(oldContainers, func(c *container.Container, toRollback chan *container.Container) error {
-		c, startErr := args.provisioner.start(c, a, cmdData, args.version, w, destinationHost...)
+		c, startErr := args.provisioner.start(ctx, c, a, cmdData, args.version, w, destinationHost...)
 		if startErr != nil {
 			return startErr
 		}
@@ -570,7 +540,7 @@ func addContainersWithHost(args *changeUnitsPipelineArgs) ([]container.Container
 	return result, nil
 }
 
-func (p *dockerProvisioner) AddUnits(a provision.App, units uint, process string, version appTypes.AppVersion, w io.Writer) error {
+func (p *dockerProvisioner) AddUnits(ctx context.Context, a provision.App, units uint, process string, version appTypes.AppVersion, w io.Writer) error {
 	if a.GetDeploys() == 0 {
 		return errors.New("New units can only be added after the first deployment")
 	}
@@ -580,11 +550,11 @@ func (p *dockerProvisioner) AddUnits(a provision.App, units uint, process string
 	if w == nil {
 		w = ioutil.Discard
 	}
-	_, err := p.runCreateUnitsPipeline(w, a, map[string]*containersToAdd{process: {Quantity: int(units)}}, version)
+	_, err := p.runCreateUnitsPipeline(ctx, w, a, map[string]*containersToAdd{process: {Quantity: int(units)}}, version)
 	return err
 }
 
-func (p *dockerProvisioner) RemoveUnits(a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
+func (p *dockerProvisioner) RemoveUnits(ctx context.Context, a provision.App, units uint, processName string, version appTypes.AppVersion, w io.Writer) error {
 	if a == nil {
 		return errors.New("remove units: app should not be nil")
 	}
@@ -644,7 +614,7 @@ func (p *dockerProvisioner) RemoveUnits(a provision.App, units uint, processName
 		&provisionRemoveOldUnits,
 		&provisionUnbindOldUnits,
 	)
-	err = pipeline.Execute(args)
+	err = pipeline.Execute(ctx, args)
 	if err != nil {
 		return errors.Wrap(err, "error removing routes, units weren't removed")
 	}
@@ -684,7 +654,7 @@ func (p *dockerProvisioner) SetUnitStatus(unit provision.Unit, status provision.
 	return p.checkContainer(cont)
 }
 
-func (p *dockerProvisioner) ExecuteCommand(opts provision.ExecOptions) error {
+func (p *dockerProvisioner) ExecuteCommand(ctx context.Context, opts provision.ExecOptions) error {
 	if opts.Term != "" {
 		opts.Cmds = append([]string{"/usr/bin/env", "TERM=" + opts.Term}, opts.Cmds...)
 	}
@@ -694,11 +664,11 @@ func (p *dockerProvisioner) ExecuteCommand(opts provision.ExecOptions) error {
 		Term:   opts.Term,
 	}
 	if len(opts.Units) == 0 {
-		version, err := servicemanager.AppVersion.LatestSuccessfulVersion(opts.App)
+		version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, opts.App)
 		if err != nil {
 			return err
 		}
-		return p.runCommandInContainer(version, opts.App, opts.Stdin, opts.Stdout, opts.Stderr, pty, opts.Cmds...)
+		return p.runCommandInContainer(ctx, version, opts.App, opts.Stdin, opts.Stdout, opts.Stderr, pty, opts.Cmds...)
 	}
 	for _, u := range opts.Units {
 		cont, err := p.GetContainer(u)
@@ -725,19 +695,19 @@ func (p *dockerProvisioner) Collection() *storage.Collection {
 }
 
 // GetAppFromUnitID returns app from unit id
-func (p *dockerProvisioner) GetAppFromUnitID(unitID string) (provision.App, error) {
+func (p *dockerProvisioner) GetAppFromUnitID(ctx context.Context, unitID string) (provision.App, error) {
 	cnt, err := p.GetContainer(unitID)
 	if err != nil {
 		return nil, err
 	}
-	a, err := app.GetByName(cnt.AppName)
+	a, err := app.GetByName(ctx, cnt.AppName)
 	if err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
-func (p *dockerProvisioner) Units(apps ...provision.App) ([]provision.Unit, error) {
+func (p *dockerProvisioner) Units(ctx context.Context, apps ...provision.App) ([]provision.Unit, error) {
 	appNames := make([]string, len(apps))
 	appNameMap := map[string]provision.App{}
 	for i, a := range apps {
@@ -755,8 +725,8 @@ func (p *dockerProvisioner) Units(apps ...provision.App) ([]provision.Unit, erro
 	return units, nil
 }
 
-func (p *dockerProvisioner) RoutableAddresses(app provision.App) ([]appTypes.RoutableAddresses, error) {
-	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(app)
+func (p *dockerProvisioner) RoutableAddresses(ctx context.Context, app provision.App) ([]appTypes.RoutableAddresses, error) {
+	version, err := servicemanager.AppVersion.LatestSuccessfulVersion(ctx, app)
 	if err != nil && err != appTypes.ErrNoVersionsAvailable {
 		return nil, err
 	}
@@ -780,7 +750,7 @@ func (p *dockerProvisioner) RoutableAddresses(app provision.App) ([]appTypes.Rou
 	return []appTypes.RoutableAddresses{{Addresses: addrs}}, nil
 }
 
-func (p *dockerProvisioner) RegisterUnit(a provision.App, unitId string, customData map[string]interface{}) error {
+func (p *dockerProvisioner) RegisterUnit(ctx context.Context, a provision.App, unitId string, customData map[string]interface{}) error {
 	cont, err := p.GetContainer(unitId)
 	if err != nil {
 		return err
@@ -788,7 +758,7 @@ func (p *dockerProvisioner) RegisterUnit(a provision.App, unitId string, customD
 	if cont.Status == provision.StatusBuilding.String() {
 		if cont.BuildingImage != "" && customData != nil {
 			var version appTypes.AppVersion
-			version, err = servicemanager.AppVersion.VersionByPendingImage(a, cont.BuildingImage)
+			version, err = servicemanager.AppVersion.VersionByPendingImage(ctx, a, cont.BuildingImage)
 			if err != nil {
 				return err
 			}
@@ -872,7 +842,7 @@ func pluralize(str string, sz int) string {
 	return str
 }
 
-func (p *dockerProvisioner) FilterAppsByUnitStatus(apps []provision.App, status []string) ([]provision.App, error) {
+func (p *dockerProvisioner) FilterAppsByUnitStatus(ctx context.Context, apps []provision.App, status []string) ([]provision.App, error) {
 	if apps == nil {
 		return nil, errors.Errorf("apps must be provided to FilterAppsByUnitStatus")
 	}
@@ -943,7 +913,7 @@ func (n *clusterNodeWrapper) Units() ([]provision.Unit, error) {
 	}
 	units := make([]provision.Unit, len(conts))
 	for i, c := range conts {
-		a, err := app.GetByName(c.AppName)
+		a, err := app.GetByName(context.TODO(), c.AppName)
 		if err != nil {
 			return nil, err
 		}
@@ -956,7 +926,7 @@ func (n *clusterNodeWrapper) Provisioner() provision.NodeProvisioner {
 	return n.prov
 }
 
-func (p *dockerProvisioner) ListNodes(addressFilter []string) ([]provision.Node, error) {
+func (p *dockerProvisioner) ListNodes(ctx context.Context, addressFilter []string) ([]provision.Node, error) {
 	nodes, err := p.Cluster().UnfilteredNodes()
 	if err != nil {
 		return nil, err
@@ -986,7 +956,7 @@ func (p *dockerProvisioner) ListNodes(addressFilter []string) ([]provision.Node,
 	return result, nil
 }
 
-func (p *dockerProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) ([]provision.Node, error) {
+func (p *dockerProvisioner) ListNodesByFilter(ctx context.Context, filter *provTypes.NodeFilter) ([]provision.Node, error) {
 	nodes, err := p.Cluster().UnfilteredNodesForMetadata(filter.Metadata)
 	if err != nil {
 		return nil, err
@@ -999,7 +969,7 @@ func (p *dockerProvisioner) ListNodesByFilter(filter *provTypes.NodeFilter) ([]p
 	return result, nil
 }
 
-func (p *dockerProvisioner) NodeForNodeData(nodeData provision.NodeStatusData) (provision.Node, error) {
+func (p *dockerProvisioner) NodeForNodeData(ctx context.Context, nodeData provision.NodeStatusData) (provision.Node, error) {
 	nodes, err := p.Cluster().UnfilteredNodes()
 	if err != nil {
 		return nil, err
@@ -1035,14 +1005,14 @@ func (p *dockerProvisioner) NodeForNodeData(nodeData provision.NodeStatusData) (
 	if chosenNode != nil {
 		return &clusterNodeWrapper{Node: chosenNode, prov: p}, nil
 	}
-	return node.FindNodeByAddrs(p, nodeData.Addrs)
+	return node.FindNodeByAddrs(ctx, p, nodeData.Addrs)
 }
 
 func (p *dockerProvisioner) GetName() string {
 	return provisionerName
 }
 
-func (p *dockerProvisioner) AddNode(opts provision.AddNodeOptions) error {
+func (p *dockerProvisioner) AddNode(ctx context.Context, opts provision.AddNodeOptions) error {
 	if opts.Metadata == nil {
 		opts.Metadata = map[string]string{}
 	}
@@ -1077,7 +1047,7 @@ func (p *dockerProvisioner) AddNode(opts provision.AddNodeOptions) error {
 	return err
 }
 
-func (p *dockerProvisioner) UpdateNode(opts provision.UpdateNodeOptions) error {
+func (p *dockerProvisioner) UpdateNode(ctx context.Context, opts provision.UpdateNodeOptions) error {
 	if opts.Metadata == nil {
 		opts.Metadata = map[string]string{}
 	}
@@ -1098,7 +1068,7 @@ func (p *dockerProvisioner) UpdateNode(opts provision.UpdateNodeOptions) error {
 	return err
 }
 
-func (p *dockerProvisioner) GetNode(address string) (provision.Node, error) {
+func (p *dockerProvisioner) GetNode(ctx context.Context, address string) (provision.Node, error) {
 	node, err := p.Cluster().GetNode(address)
 	if err != nil {
 		if err == clusterStorage.ErrNoSuchNode {
@@ -1109,7 +1079,7 @@ func (p *dockerProvisioner) GetNode(address string) (provision.Node, error) {
 	return &clusterNodeWrapper{Node: &node, prov: p}, nil
 }
 
-func (p *dockerProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
+func (p *dockerProvisioner) RemoveNode(ctx context.Context, opts provision.RemoveNodeOptions) error {
 	node, err := p.Cluster().GetNode(opts.Address)
 	if err != nil {
 		if err == clusterStorage.ErrNoSuchNode {
@@ -1123,7 +1093,7 @@ func (p *dockerProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
 		return err
 	}
 	if opts.Rebalance {
-		err = p.rebalanceContainersByHost(net.URLToHost(opts.Address), opts.Writer)
+		err = p.rebalanceContainersByHost(ctx, net.URLToHost(opts.Address), opts.Writer)
 		if err != nil {
 			return err
 		}
@@ -1131,15 +1101,15 @@ func (p *dockerProvisioner) RemoveNode(opts provision.RemoveNodeOptions) error {
 	return p.Cluster().Unregister(opts.Address)
 }
 
-func (p *dockerProvisioner) UpgradeNodeContainer(name string, pool string, writer io.Writer) error {
+func (p *dockerProvisioner) UpgradeNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
 	return internalNodeContainer.RecreateNamedContainers(p, writer, name, pool)
 }
 
-func (p *dockerProvisioner) RemoveNodeContainer(name string, pool string, writer io.Writer) error {
+func (p *dockerProvisioner) RemoveNodeContainer(ctx context.Context, name string, pool string, writer io.Writer) error {
 	return internalNodeContainer.RemoveNamedContainers(p, writer, name, pool)
 }
 
-func (p *dockerProvisioner) RebalanceNodes(opts provision.RebalanceNodesOptions) (bool, error) {
+func (p *dockerProvisioner) RebalanceNodes(ctx context.Context, opts provision.RebalanceNodesOptions) (bool, error) {
 	if opts.MetadataFilter == nil {
 		opts.MetadataFilter = map[string]string{}
 	}
@@ -1148,7 +1118,7 @@ func (p *dockerProvisioner) RebalanceNodes(opts provision.RebalanceNodesOptions)
 	}
 	isOnlyPool := len(opts.MetadataFilter) == 1 && opts.MetadataFilter[provision.PoolMetadataName] != ""
 	if opts.Force || !isOnlyPool || len(opts.AppFilter) > 0 {
-		_, err := p.rebalanceContainersByFilter(opts.Event, opts.AppFilter, opts.MetadataFilter, opts.Dry)
+		_, err := p.rebalanceContainersByFilter(ctx, opts.Event, opts.AppFilter, opts.MetadataFilter, opts.Dry)
 		return true, err
 	}
 	nodes, err := p.Cluster().NodesForMetadata(opts.MetadataFilter)
@@ -1165,7 +1135,7 @@ func (p *dockerProvisioner) RebalanceNodes(opts provision.RebalanceNodesOptions)
 		return false, errors.Wrapf(err, "unable to obtain container gap in nodes")
 	}
 	buf := safe.NewBuffer(nil)
-	dryProvisioner, err := p.rebalanceContainersByFilter(buf, nil, opts.MetadataFilter, true)
+	dryProvisioner, err := p.rebalanceContainersByFilter(context.TODO(), buf, nil, opts.MetadataFilter, true)
 	if err != nil {
 		return false, errors.Wrapf(err, "unable to run dry rebalance to check if rebalance is needed. log: %s", buf.String())
 	}
@@ -1178,7 +1148,7 @@ func (p *dockerProvisioner) RebalanceNodes(opts provision.RebalanceNodesOptions)
 	}
 	if math.Abs((float64)(gap-gapAfter)) > 2.0 {
 		fmt.Fprintf(opts.Event, "Rebalancing as gap is %d, after rebalance gap will be %d\n", gap, gapAfter)
-		_, err := p.rebalanceContainersByFilter(opts.Event, nil, opts.MetadataFilter, opts.Dry)
+		_, err := p.rebalanceContainersByFilter(context.TODO(), opts.Event, nil, opts.MetadataFilter, opts.Dry)
 		return true, err
 	}
 	return false, nil

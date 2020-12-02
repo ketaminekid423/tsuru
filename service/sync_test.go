@@ -63,7 +63,7 @@ func (s *SyncSuite) SetUpTest(c *check.C) {
 	c.Assert(err, check.IsNil)
 	s.team = authTypes.Team{Name: "metallica"}
 	opts := pool.AddPoolOptions{Name: "pool1", Default: true, Provisioner: "fake"}
-	err = pool.AddPool(opts)
+	err = pool.AddPool(context.TODO(), opts)
 	c.Assert(err, check.IsNil)
 
 	servicemock.SetMockService(&s.mockService)
@@ -87,7 +87,7 @@ func (s *SyncSuite) SetUpTest(c *check.C) {
 }
 
 func (s *SyncSuite) TearDownSuite(c *check.C) {
-	s.conn.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.conn.Apps().Database)
 	s.conn.Close()
 }
 
@@ -102,7 +102,7 @@ func (s *SyncSuite) TestBindSyncer(c *check.C) {
 	err = service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "my-app", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -138,12 +138,12 @@ func (s *SyncSuite) TestBindSyncer(c *check.C) {
 	shutdown.Do(ctx, ioutil.Discard)
 	cancel()
 	c.Assert(err, check.IsNil)
-	instance, err = service.GetServiceInstance("mysql", "my-mysql")
+	instance, err = service.GetServiceInstance(context.TODO(), "mysql", "my-mysql")
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.BoundUnits, check.DeepEquals, []service.Unit{
 		{AppName: a.Name, ID: units[0].GetID(), IP: units[0].GetIp()},
 	})
-	instance, err = service.GetServiceInstance("mysql2", "my-mysql")
+	instance, err = service.GetServiceInstance(context.TODO(), "mysql2", "my-mysql")
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.BoundUnits, check.DeepEquals, []service.Unit{
 		{AppName: a.Name, ID: units[0].GetID(), IP: units[0].GetIp()},
@@ -176,10 +176,10 @@ func (s *SyncSuite) TestBindSyncerMultipleAppsBound(c *check.C) {
 	err := service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "my-app", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	a2 := &app.App{Name: "my-app2", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a2, &s.user)
+	err = app.CreateApp(context.TODO(), a2, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	newVersionForApp(c, a2)
@@ -227,7 +227,7 @@ func (s *SyncSuite) TestBindSyncerMultipleAppsBound(c *check.C) {
 	shutdown.Do(ctx, ioutil.Discard)
 	cancel()
 	c.Assert(err, check.IsNil)
-	instance, err = service.GetServiceInstance("mysql", "my-mysql")
+	instance, err = service.GetServiceInstance(context.TODO(), "mysql", "my-mysql")
 	c.Assert(err, check.IsNil)
 	sort.Slice(instance.BoundUnits, func(i int, j int) bool {
 		return instance.BoundUnits[i].ID < instance.BoundUnits[j].ID
@@ -242,7 +242,7 @@ func (s *SyncSuite) TestBindSyncerMultipleAppsBound(c *check.C) {
 
 func (s *SyncSuite) TestBindSyncerNoOp(c *check.C) {
 	a := &app.App{Name: "my-app", Platform: "python", TeamOwner: s.team.Name}
-	err := app.CreateApp(a, &s.user)
+	err := app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -275,7 +275,7 @@ func (s *SyncSuite) TestBindSyncerError(c *check.C) {
 	err = service.Create(srvc)
 	c.Assert(err, check.IsNil)
 	a := &app.App{Name: "my-app", Platform: "python", TeamOwner: s.team.Name}
-	err = app.CreateApp(a, &s.user)
+	err = app.CreateApp(context.TODO(), a, &s.user)
 	c.Assert(err, check.IsNil)
 	newVersionForApp(c, a)
 	err = a.AddUnits(1, "", "", nil)
@@ -314,13 +314,13 @@ func (s *SyncSuite) TestBindSyncerError(c *check.C) {
 	shutdown.Do(ctx, ioutil.Discard)
 	cancel()
 	c.Assert(err, check.IsNil)
-	instance, err = service.GetServiceInstance("mysql", "my-mysql")
+	instance, err = service.GetServiceInstance(context.TODO(), "mysql", "my-mysql")
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.BoundUnits, check.DeepEquals, []service.Unit{
 		{AppName: a.Name, ID: units[0].GetID(), IP: units[0].GetIp()},
 		{AppName: a.Name, ID: "wrong", IP: "wrong"},
 	})
-	instance, err = service.GetServiceInstance("mysql2", "my-mysql")
+	instance, err = service.GetServiceInstance(context.TODO(), "mysql2", "my-mysql")
 	c.Assert(err, check.IsNil)
 	c.Assert(instance.BoundUnits, check.DeepEquals, []service.Unit{})
 	evts, err := event.All()

@@ -4,6 +4,7 @@ import (
 	"github.com/tsuru/config"
 	"github.com/tsuru/tsuru/db"
 	"github.com/tsuru/tsuru/db/dbtest"
+	servicemock "github.com/tsuru/tsuru/servicemanager/mock"
 	_ "github.com/tsuru/tsuru/storage/mongodb"
 	check "gopkg.in/check.v1"
 )
@@ -22,10 +23,11 @@ func (s *S) SetUpSuite(c *check.C) {
 	var err error
 	s.storage, err = db.Conn()
 	c.Assert(err, check.IsNil)
+	servicemock.SetMockService(&servicemock.MockService{})
 }
 
 func (s *S) TearDownSuite(c *check.C) {
-	s.storage.Apps().Database.DropDatabase()
+	dbtest.ClearAllCollections(s.storage.Apps().Database)
 	s.storage.Close()
 }
 

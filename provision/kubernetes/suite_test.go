@@ -5,6 +5,7 @@
 package kubernetes
 
 import (
+	"context"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -97,7 +98,9 @@ func (s *S) SetUpTest(c *check.C) {
 		Addresses:   []string{"https://clusteraddr"},
 		Default:     true,
 		Provisioner: provisionerName,
-		CustomData:  map[string]string{},
+		CustomData: map[string]string{
+			enableLogsFromAPIServerKey: "true",
+		},
 	}
 	s.clusterClient, err = NewClusterClient(clus)
 	c.Assert(err, check.IsNil)
@@ -119,7 +122,7 @@ func (s *S) SetUpTest(c *check.C) {
 	}
 	routertest.FakeRouter.Reset()
 	rand.Seed(0)
-	err = pool.AddPool(pool.AddPoolOptions{
+	err = pool.AddPool(context.TODO(), pool.AddPoolOptions{
 		Name:        "test-default",
 		Default:     true,
 		Provisioner: "kubernetes",
@@ -137,10 +140,10 @@ func (s *S) SetUpTest(c *check.C) {
 	s.user = &auth.User{Email: "whiskeyjack@genabackis.com", Password: "123456", Quota: quota.UnlimitedQuota}
 	nativeScheme := auth.ManagedScheme(native.NativeScheme{})
 	app.AuthScheme = nativeScheme
-	_, err = nativeScheme.Create(s.user)
+	_, err = nativeScheme.Create(context.TODO(), s.user)
 	c.Assert(err, check.IsNil)
 	s.team = &authTypes.Team{Name: "admin"}
-	s.token, err = nativeScheme.Login(map[string]string{"email": s.user.Email, "password": "123456"})
+	s.token, err = nativeScheme.Login(context.TODO(), map[string]string{"email": s.user.Email, "password": "123456"})
 	c.Assert(err, check.IsNil)
 	servicemock.SetMockService(&s.mockService)
 	s.mockService.Team.OnList = func() ([]authTypes.Team, error) {
@@ -163,16 +166,16 @@ func (s *S) SetUpTest(c *check.C) {
 	s.mockService.Plan.OnDefaultPlan = func() (*appTypes.Plan, error) {
 		return &plan, nil
 	}
-	s.mockService.UserQuota.OnGet = func(email string) (*quota.Quota, error) {
-		c.Assert(email, check.Equals, s.user.Email)
+	s.mockService.UserQuota.OnGet = func(item quota.QuotaItem) (*quota.Quota, error) {
+		c.Assert(item.GetName(), check.Equals, s.user.Email)
 		return &s.user.Quota, nil
 	}
-	s.mockService.UserQuota.OnInc = func(email string, q int) error {
-		c.Assert(email, check.Equals, s.user.Email)
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, q int) error {
+		c.Assert(item.GetName(), check.Equals, s.user.Email)
 		return nil
 	}
-	s.mockService.UserQuota.OnInc = func(email string, q int) error {
-		c.Assert(email, check.Equals, s.user.Email)
+	s.mockService.UserQuota.OnInc = func(item quota.QuotaItem, q int) error {
+		c.Assert(item.GetName(), check.Equals, s.user.Email)
 		return nil
 	}
 	clust := s.client.GetCluster()
@@ -193,6 +196,8 @@ func (s *S) SetUpTest(c *check.C) {
 		}
 		return ret, nil
 	}
+	servicemanager.App, err = app.AppService()
+	c.Assert(err, check.IsNil)
 	servicemanager.AppVersion, err = version.AppVersionService()
 	c.Assert(err, check.IsNil)
 }
